@@ -148,6 +148,33 @@ Or use the **Download** button in the UI to pull from HuggingFace.
 
 Each instance exposes an OpenAI-compatible API on its assigned port.
 
+### Layer autodetection
+
+When you select a GGUF model, LlamaMan reads the file's metadata to detect the total number of layers (block count). This is displayed next to the **GPU Layers** input so you can see exactly how many layers are available to offload (e.g. `/ 32`). Set GPU Layers to `-1` to offload all layers to GPU.
+
+### Launch settings reference
+
+| Setting | Default | Description |
+|---|---|---|
+| **GPU Layers** | `-1` | Number of layers to offload to GPU. `-1` = all layers, `0` = CPU only. Total layers are autodetected from the GGUF file. |
+| **Context Size** | `4096` | Maximum context window in tokens (`--ctx-size`). |
+| **Parallel** | `1` | Number of parallel sequences the llama-server can process simultaneously (`--parallel`). Controls KV cache slot allocation inside the server itself. |
+| **Idle Timeout min** | `0` | Minutes of inactivity before the server is stopped to free VRAM. `0` = disabled. See [Idle Timeout](#idle-timeout). |
+| **Max Concurrent** | `0` | Maximum number of inference requests allowed in-flight at once. `0` = unlimited. When set, incoming requests are queued and gated by a semaphore. |
+| **Max Queue Depth** | `200` | Maximum number of requests that can wait in the queue when `Max Concurrent` is active. Requests beyond this limit are rejected with HTTP 429. |
+| **Share Queue** | off | When enabled, multiple proxy-managed instances of the **same model** share a single request queue. Incoming requests are distributed across instances as slots become available, providing simple load balancing. |
+| **Embedding Model** | off | Marks the instance as an embedding model. Embedding instances are **excluded** from the `LLAMAMAN_MAX_MODELS` count and will never be evicted by the proxy's LRU policy. |
+| **GPU Devices** | `0` | Comma-separated GPU indices for multi-GPU setups (e.g. `0,1`). |
+| **Extra Args** | _(empty)_ | Additional flags passed directly to llama-server (e.g. `--flash-attn`). |
+
+### Concurrency and queueing
+
+When **Max Concurrent** is set to a value greater than 0, LlamaMan places a concurrency gate in front of the instance. Requests that exceed the limit are held in a FIFO queue (up to **Max Queue Depth**). If the queue is also full, new requests are rejected with HTTP 429.
+
+The gate tracks active and queued request counts, which are visible in the instance list via the API.
+
+**Parallel vs Max Concurrent:** `Parallel` controls how many sequences the llama-server processes internally (KV cache slots). `Max Concurrent` is an external gate that limits how many requests LlamaMan forwards to the server at once. You can use both together — for example, `Parallel=4` with `Max Concurrent=4` ensures the server always has enough KV slots for the requests it receives.
+
 ## Idle Timeout
 
 Set **Idle Timeout min** in the launch form (0 = disabled). When enabled:
@@ -158,6 +185,15 @@ Set **Idle Timeout min** in the launch form (0 = disabled). When enabled:
 - Client sees the same port/API with just a cold-start delay
 
 For instances managed by the llamaman proxy (OpenWebUI), use the `LLAMAMAN_IDLE_TIMEOUT` env var instead.
+
+## Cleanup Settings
+
+The UI provides automatic cleanup of stale records under **Settings**:
+
+- **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads — active downloads are never touched.
+- **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances — running instances are never removed.
+
+Cleanup runs periodically in the background. These settings only remove records from the UI/state — they do not delete model files or stop running processes.
 
 ## OpenWebUI Integration (llamaman proxy)
 
@@ -189,6 +225,7 @@ Key details:
 
 - **All running instances count toward the limit** - both manually launched instances (from the LlamaMan UI) and proxy-managed ones. If you manually launch 2 models and `LLAMAMAN_MAX_MODELS=1`, the proxy sees you're already over the limit.
 - **Only proxy-managed instances are evicted.** Manually launched instances are never killed by the eviction policy. If all running instances are manual, the proxy will still launch the requested model without evicting anything - your manual instances are sacrosanct.
+- **Embedding models are excluded.** Instances marked as **Embedding Model** do not count toward the limit and are never evicted. This lets you keep an embedding model loaded permanently alongside your chat models.
 - **`LLAMAMAN_MAX_MODELS=0` (default) disables eviction entirely.** The proxy will launch models on demand without ever stopping existing ones.
 
 ## Storage Backends
