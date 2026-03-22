@@ -1,5 +1,9 @@
 # <img src="static/images/logo.svg" alt="logo" width="24"> LlamaMan
 
+<p align="center">
+  <img src="docs/llamaman.jpg" alt="LlamaMan" width="400">
+</p>
+
 A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances from inside a Docker container. Includes an Ollama-compatible API proxy so it works as a drop-in replacement for Ollama with [Open WebUI](https://github.com/open-webui/open-webui).
 
 ## Features
