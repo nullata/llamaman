@@ -1,0 +1,17 @@
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+.git/
+.gitignore
+.gitattributes
+.dockerignore
+*.md
+models/
+*.log
+.env
+.env.*
+tests/
+test_*.sh
+docker-compose*.yml

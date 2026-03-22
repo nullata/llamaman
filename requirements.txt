@@ -1,0 +1,6 @@
+flask
+requests
+psutil
+gunicorn
+sqlalchemy
+pymysql

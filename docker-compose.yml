@@ -1,0 +1,83 @@
+services:
+  # --- NVIDIA CUDA (default) ---
+  llamaman:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    ports:
+      # Management UI
+      - "5000:5000"
+      # Llamaman proxy (Ollama-compatible API for OpenWebUI)
+      - "42069:42069"
+      # llama-server instance ports
+      - "8000-8020:8000-8020"
+    volumes:
+      - ./models:/models
+      - ./data:/data
+      - ./logs:/tmp/llama-logs
+    environment:
+      - MODELS_DIR=/models
+      - DATA_DIR=/data
+      - LOGS_DIR=/tmp/llama-logs
+      - PORT_RANGE_START=8000
+      - PORT_RANGE_END=8020
+      - LLAMAMAN_MAX_MODELS=1
+      - LLAMAMAN_PROXY_PORT=42069
+      - LLAMAMAN_IDLE_TIMEOUT=0
+      - HEALTH_CHECK_TIMEOUT=3
+      # Uncomment to set a fixed Flask session secret (required for multi-replica)
+      # - SECRET_KEY=change-me-to-something-random
+      # Uncomment to use MariaDB/MySQL instead of JSON file storage
+      # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
+    # depends_on:
+    #   mariadb:
+    #     condition: service_healthy
+    #     required: false
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # --- AMD ROCm ---
+  # To use: docker compose --profile rocm up --build llamaman-rocm
+  # Do NOT run both services simultaneously - they share the same ports.
+  llamaman-rocm:
+    build:
+      context: .
+      dockerfile: Dockerfile.rocm
+    profiles: [rocm]
+    ports:
+      - "5000:5000"
+      - "42069:42069"
+      - "8000-8020:8000-8020"
+    volumes:
+      - ./models:/models
+      - ./data:/data
+      - ./logs:/tmp/llama-logs
+    environment:
+      - MODELS_DIR=/models
+      - DATA_DIR=/data
+      - LOGS_DIR=/tmp/llama-logs
+      - PORT_RANGE_START=8000
+      - PORT_RANGE_END=8020
+      - LLAMAMAN_MAX_MODELS=1
+      - LLAMAMAN_PROXY_PORT=42069
+      - LLAMAMAN_IDLE_TIMEOUT=0
+      - HEALTH_CHECK_TIMEOUT=3
+      # - SECRET_KEY=change-me-to-something-random
+      # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
+    # depends_on:
+    #   mariadb:
+    #     condition: service_healthy
+    #     required: false
+    devices:
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    group_add:
+      - video
+      - render
+    restart: unless-stopped

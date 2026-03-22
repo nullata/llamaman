@@ -1,0 +1,61 @@
+# Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
+
+from flask import Blueprint, jsonify, request
+
+from storage import get_storage
+
+bp = Blueprint("presets", __name__)
+
+
+def _normalize_model_path(model_path: str) -> str:
+    """Ensure model_path is an absolute path (leading /).
+
+    Flask's <path:> converter strips the leading / from the URL, so
+    /api/presets/models/foo.gguf yields model_path='models/foo.gguf'
+    but the storage key is '/models/foo.gguf'.
+    """
+    if not model_path.startswith("/"):
+        model_path = "/" + model_path
+    return model_path
+
+
+@bp.route("/api/presets", methods=["GET"])
+def api_presets_list():
+    return jsonify(get_storage().get_all_presets())
+
+
+@bp.route("/api/presets/<path:model_path>", methods=["GET"])
+def api_preset_get(model_path):
+    model_path = _normalize_model_path(model_path)
+    preset = get_storage().get_preset(model_path)
+    if preset is None:
+        return jsonify({"error": "No preset for this model"}), 404
+    return jsonify(preset)
+
+
+@bp.route("/api/presets/<path:model_path>", methods=["PUT"])
+def api_preset_save(model_path):
+    model_path = _normalize_model_path(model_path)
+    body = request.get_json(force=True)
+    data = {
+        "n_gpu_layers": body.get("n_gpu_layers", -1),
+        "ctx_size": body.get("ctx_size", 4096),
+        "threads": body.get("threads"),
+        "parallel": body.get("parallel"),
+        "extra_args": body.get("extra_args", ""),
+        "gpu_devices": body.get("gpu_devices", ""),
+        "idle_timeout_min": body.get("idle_timeout_min", 0),
+        "max_concurrent": body.get("max_concurrent", 0),
+        "max_queue_depth": body.get("max_queue_depth", 200),
+        "share_queue": body.get("share_queue", False),
+        "embedding_model": body.get("embedding_model", False),
+    }
+    get_storage().save_preset(model_path, data)
+    return jsonify({"status": "saved"})
+
+
+@bp.route("/api/presets/<path:model_path>", methods=["DELETE"])
+def api_preset_delete(model_path):
+    model_path = _normalize_model_path(model_path)
+    get_storage().delete_preset(model_path)
+    return jsonify({"status": "deleted"})

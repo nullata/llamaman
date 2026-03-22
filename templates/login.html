@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ "Setup" if setup else "Login" }} - LlamaMan</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
+    integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg=="
+    crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="icon" href="{{ url_for('static', filename='images/logo.svg') }}" type="image/svg+xml" />
+</head>
+
+<body class="login-page">
+  <div class="login-card">
+    <h1>
+      <img src="{{ url_for('static', filename='images/logo.svg') }}" alt="null" style="height:22px;width:auto;" />
+      LlamaMan
+    </h1>
+    {% if setup %}
+    <p class="subtitle">Create your admin account to get started.</p>
+    {% else %}
+    <p class="subtitle">Sign in to continue.</p>
+    {% endif %}
+
+    {% if error %}
+    <div class="error"><i class="fa-solid fa-circle-exclamation"></i> {{ error }}</div>
+    {% endif %}
+
+    <form method="POST">
+      <div class="form-group">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" required autofocus />
+      </div>
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" required />
+      </div>
+      {% if setup %}
+      <div class="form-group">
+        <label for="confirm">Confirm Password</label>
+        <input id="confirm" name="confirm" type="password" required />
+      </div>
+      {% endif %}
+      <button class="btn-login" type="submit">
+        <i class="fa-solid fa-{{ 'user-plus' if setup else 'right-to-bracket' }}"></i>
+        {{ "Create Account" if setup else "Sign In" }}
+      </button>
+    </form>
+  </div>
+</body>
+
+</html>

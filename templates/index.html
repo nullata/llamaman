@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LlamaMan</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css"
+    integrity="sha512-Evv84Mr4kqVGRNSgIGL/F/aIDqQb7xQ2vcrdIwxfjThSH8CSR7PBEakCr51Ck+w+/U6swU2Im1vVX0SVk9ABhg=="
+    crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="icon" href="{{ url_for('static', filename='images/logo.svg') }}" type="image/svg+xml" />
+
+</head>
+
+<body>
+
+  <header>
+    <img src="{{ url_for('static', filename='images/logo.svg') }}" alt="null" class="header-logo" />
+    <h1>LlamaMan</h1>
+    <div class="header-spacer"></div>
+    <nav class="header-nav" aria-label="Primary">
+      <span id="instance-count" class="nav-meta">0 instances</span>
+      <span class="header-separator" aria-hidden="true">|</span>
+      <a href="/logout" class="nav-link nav-link-logout" title="Logout"><i
+          class="fa-solid fa-right-from-bracket"></i></a>
+    </nav>
+  </header>
+
+  <div id="gpu-warning">
+    <i class="fa-solid fa-triangle-exclamation"></i> No GPU detected. Set GPU Layers to 0 to run fully on CPU, or a
+    partial number to offload what fits in VRAM.
+  </div>
+
+  <div class="layout">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h2>Model Library</h2>
+        <div class="btn-group">
+          <button class="btn-icon" id="btn-open-download" title="Download a model from HuggingFace"><i
+              class="fa-solid fa-download"></i> Download</button>
+          <button class="btn-icon" id="btn-refresh-models" title="Rescan models"><i
+              class="fa-solid fa-arrows-rotate"></i></button>
+        </div>
+      </div>
+      <input type="text" id="model-search" placeholder="Search models…" />
+      <div id="model-list">
+        <div id="model-empty">Scanning…</div>
+      </div>
+
+      <!-- Downloads section -->
+      <div class="sidebar-section">
+        <div class="sidebar-section-header" id="dl-section-toggle">
+          <h2>Downloads</h2>
+          <span class="chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div id="downloads-panel">
+          <div id="dl-empty">No downloads yet.</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+
+      <!-- System Info (CPU & RAM) -->
+      <div class="card" id="system-info-card" style="display:none;">
+        <div class="section-heading">
+          <h2>System</h2>
+          <span id="system-cores" class="text-meta"></span>
+          <button class="btn-icon btn-icon-sm" id="btn-refresh-system" title="Refresh system info"><i
+              class="fa-solid fa-arrows-rotate"></i></button>
+        </div>
+        <div id="system-info-bars"></div>
+      </div>
+
+      <!-- GPU VRAM Indicator -->
+      <div class="card" id="gpu-vram-card" style="display:none;">
+        <div class="section-heading">
+          <h2>GPU VRAM</h2>
+          <button class="btn-icon btn-icon-sm" id="btn-refresh-gpu" title="Refresh GPU info"><i
+              class="fa-solid fa-arrows-rotate"></i></button>
+        </div>
+        <div id="gpu-vram-bars"></div>
+      </div>
+
+      <!-- Cleanup Settings -->
+      <div class="card">
+        <div class="section-heading collapsible-heading" data-section="cleanup">
+          <h2>Cleanup Settings</h2>
+          <span class="chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div class="collapsible-body" data-section="cleanup">
+          <div class="cleanup-settings-grid">
+            <div class="form-group cleanup-toggle-grid">
+              <label for="s-dl-cleanup-enabled">Auto-clean completed/failed downloads</label>
+              <label class="toggle-switch" for="s-dl-cleanup-enabled"
+                aria-label="Auto-clean completed or failed downloads">
+                <input id="s-dl-cleanup-enabled" type="checkbox" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="form-group cleanup-input-row">
+              <label for="s-dl-cleanup-age">Download cleanup age (hours)</label>
+              <input id="s-dl-cleanup-age" type="number" value="24" min="1" />
+            </div>
+            <div class="form-group cleanup-toggle-grid">
+              <label for="s-inst-cleanup-enabled">Auto-clean stopped instances</label>
+              <label class="toggle-switch" for="s-inst-cleanup-enabled" aria-label="Auto-clean stopped instances">
+                <input id="s-inst-cleanup-enabled" type="checkbox" />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="form-group cleanup-input-row">
+              <label for="s-inst-cleanup-age">Instance cleanup age (hours)</label>
+              <input id="s-inst-cleanup-age" type="number" value="24" min="1" />
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-secondary" type="button" id="btn-save-settings"><i
+                class="fa-solid fa-floppy-disk"></i>
+              Save</button>
+            <span id="settings-status" class="status-text"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- API Keys -->
+      <div class="card">
+        <div class="section-heading collapsible-heading" data-section="apikeys">
+          <h2>API Keys</h2>
+          <span class="chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div class="collapsible-body" data-section="apikeys">
+          <div class="cleanup-settings-grid" style="margin-bottom:14px;">
+            <div class="form-group cleanup-toggle-grid">
+              <label for="s-require-auth">Require authentication for all endpoints</label>
+              <label class="toggle-switch" for="s-require-auth" aria-label="Require authentication for all endpoints">
+                <input id="s-require-auth" type="checkbox" checked />
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+          <p id="auth-hint" class="hint-text">
+            All API requests (including model loading) require a valid bearer token.
+          </p>
+          <div class="form-actions form-actions-compact">
+            <input id="ak-name" type="text" placeholder="Key name (e.g. OpenWebUI)" class="input-narrow" />
+            <button class="btn btn-primary" type="button" id="btn-create-api-key"><i class="fa-solid fa-plus"></i>
+              Create Key</button>
+          </div>
+          <div id="api-keys-list"></div>
+        </div>
+      </div>
+
+      <!-- Launch Form -->
+      <div class="card">
+        <div class="section-heading collapsible-heading" data-section="launch">
+          <h2>Launch Instance</h2>
+          <span class="chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div class="collapsible-body" data-section="launch">
+          <form id="launch-form" autocomplete="off">
+            <div class="form-grid">
+              <div class="form-group full">
+                <label for="f-model-path">Model Path</label>
+                <input id="f-model-path" type="text" placeholder="/models/my-model" required />
+              </div>
+              <div class="form-group">
+                <label for="f-port">Port</label>
+                <input id="f-port" type="number" value="8000" min="1024" max="65535" required />
+              </div>
+              <div class="form-group">
+                <label for="f-gpu-layers">GPU Layers (-1 = all, 0 = CPU only)</label>
+                <div class="inline-field">
+                  <input id="f-gpu-layers" type="number" value="-1" min="-1" />
+                  <span id="gpu-layers-total" class="text-meta"></span>
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="f-ctx-size">Context Size</label>
+                <input id="f-ctx-size" type="number" value="4096" min="128" />
+              </div>
+              <div class="form-group">
+                <label for="f-threads">CPU Threads (optional)</label>
+                <input id="f-threads" type="number" placeholder="(auto)" min="1" />
+              </div>
+              <div class="form-group">
+                <label for="f-parallel">Parallel Slots (optional)</label>
+                <input id="f-parallel" type="number" placeholder="(default 1)" min="1" />
+              </div>
+              <div class="form-group">
+                <label for="f-gpu-devices">GPU Devices (optional)</label>
+                <input id="f-gpu-devices" type="text" placeholder="(all)  e.g. 0  or 0,1" />
+              </div>
+              <div class="form-group">
+                <label for="f-idle-timeout">Idle Timeout min (0 = off)</label>
+                <input id="f-idle-timeout" type="number" value="0" min="0" placeholder="0" />
+              </div>
+              <div class="form-group">
+                <label for="f-max-concurrent">Max Concurrent (0 = unlimited)</label>
+                <input id="f-max-concurrent" type="number" value="0" min="0" placeholder="0" />
+              </div>
+              <div class="form-group">
+                <label for="f-max-queue-depth">Max Queue Depth</label>
+                <input id="f-max-queue-depth" type="number" value="200" min="1" placeholder="200" />
+              </div>
+              <div class="form-group full">
+                <label for="f-extra">Extra Args</label>
+                <input id="f-extra" type="text" placeholder="--flash-attn --mlock" />
+              </div>
+              <div class="form-group full launch-toggle-table">
+                <label for="f-share-queue">Share queue with same model</label>
+                <label class="toggle-switch" for="f-share-queue" aria-label="Share queue with same model">
+                  <input id="f-share-queue" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+                <label for="f-embedding-model">Embedding Model</label>
+                <label class="toggle-switch" for="f-embedding-model" aria-label="Embedding Model">
+                  <input id="f-embedding-model" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" type="submit" id="btn-launch"><i class="fa-solid fa-rocket"></i>
+                Launch</button>
+              <button class="btn btn-secondary" type="button" id="btn-save-preset"><i
+                  class="fa-solid fa-floppy-disk"></i>
+                Save Preset</button>
+              <span id="launch-status" class="status-text"></span>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Instances -->
+      <div class="card">
+        <div class="section-heading collapsible-heading" data-section="instances">
+          <h2 id="instances-heading">Running Instances</h2>
+          <span class="chevron"><i class="fa-solid fa-chevron-down"></i></span>
+        </div>
+        <div class="collapsible-body" data-section="instances">
+          <div id="instance-container">
+            <div id="no-instances">No instances yet. Launch one above.</div>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Download Form Modal -->
+  <div class="modal-overlay" id="download-modal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3>Download Model from HuggingFace</h3>
+        <button class="btn-icon" id="btn-close-download"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <form id="download-form" autocomplete="off">
+          <div class="form-grid form-grid-single">
+            <div class="form-group">
+              <label for="d-repo-id">HuggingFace Repo ID</label>
+              <input id="d-repo-id" type="text" placeholder="mistralai/Mistral-7B-Instruct-v0.3" required />
+            </div>
+            <div class="form-group">
+              <label for="d-filename">Single File (optional - for GGUF)</label>
+              <input id="d-filename" type="text" placeholder="model.gguf  (leave blank for full repo)" />
+            </div>
+            <div class="form-group">
+              <label for="d-token">HuggingFace Token (optional - for private repos)</label>
+              <input id="d-token" type="password" placeholder="hf_..." autocomplete="new-password" />
+            </div>
+            <div class="form-group">
+              <label for="d-speed-limit">Speed Limit Mbps (0 = unlimited)</label>
+              <input id="d-speed-limit" type="number" value="0" min="0" step="1" />
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" type="submit" id="btn-start-download"><i class="fa-solid fa-download"></i>
+              Download</button>
+            <span id="dl-form-status" class="status-text"></span>
+            <span id="dl-disk-space" class="status-text-right"></span>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log Modal -->
+  <div class="modal-overlay" id="log-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="log-modal-title">Logs</h3>
+        <div class="modal-header-controls">
+          <label class="checkbox-label">
+            <input type="checkbox" id="log-autoscroll" checked class="checkbox-accent" />
+            Auto-scroll
+          </label>
+          <button class="btn-icon" id="btn-close-logs"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
+      <div class="modal-body">
+        <pre id="log-output">Loading…</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Modal -->
+  <div class="modal-overlay" id="confirm-modal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3 id="confirm-modal-title">Confirm</h3>
+        <button class="btn-icon" id="btn-confirm-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-modal-message" class="confirm-message"></p>
+        <div class="form-actions form-actions-end">
+          <button class="btn btn-secondary" id="btn-confirm-cancel">Cancel</button>
+          <button class="btn btn-danger" id="btn-confirm-ok">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Key Reveal Modal -->
+  <div class="modal-overlay" id="api-key-modal">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3>API Key Created</h3>
+        <button class="btn-icon" id="btn-close-api-key-modal"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <p class="hint-text">
+          <i class="fa-solid fa-triangle-exclamation text-warning"></i>
+          Copy this key now - it won't be shown again.
+        </p>
+        <div class="key-reveal-box">
+          <code id="api-key-value" class="key-reveal-value"></code>
+          <button class="btn-icon" id="btn-copy-api-key" title="Copy to clipboard"><i
+              class="fa-solid fa-copy"></i></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/models.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/logs.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/instances.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/downloads.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/system.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/boot.js') }}"></script>
+</body>
+
+</html>
