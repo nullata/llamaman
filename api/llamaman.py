@@ -51,6 +51,14 @@ def _find_running_instance_for_model(model_path: str) -> dict | None:
     return None
 
 
+def _find_any_instance_for_model(model_path: str) -> dict | None:
+    with instances_lock:
+        for inst in instances.values():
+            if inst["model_path"] == model_path:
+                return inst
+    return None
+
+
 def _count_running_instances() -> int:
     """Count running non-embedding instances (manual + managed)."""
     with instances_lock:
@@ -106,7 +114,7 @@ def _evict_llamaman_instances_if_needed():
 
 def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
     from api.instances import (
-        launch_instance, relaunch_sleeping_instance, wait_for_healthy,
+        launch_instance, relaunch_inactive_instance, wait_for_healthy,
     )
 
     model = _find_model_by_name(model_name)
@@ -140,10 +148,12 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
                         instances[inst["id"]]["status"] = "healthy"
                 return inst, None
             return None, "model is starting but did not become healthy in time"
-        if inst and inst["status"] == "sleeping":
-            if relaunch_sleeping_instance(inst["id"]):
-                return inst, None
-            return None, "failed to wake sleeping model"
+
+        existing = inst or _find_any_instance_for_model(model["path"])
+        if existing and existing["status"] in ("sleeping", "stopped"):
+            if relaunch_inactive_instance(existing["id"]):
+                return existing, None
+            return None, "failed to wake model"
 
         _evict_llamaman_instances_if_needed()
 

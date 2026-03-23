@@ -110,8 +110,10 @@ services:
 | `MODELS_DIR` | `/models` | Directory scanned for model files. |
 | `DATA_DIR` | `/data` | Directory for persistent config/state. |
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs. |
-| `PORT_RANGE_START` | `8000` | Start of llama-server port pool. |
-| `PORT_RANGE_END` | `8020` | End of llama-server port pool. |
+| `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool. |
+| `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool. |
+| `INTERNAL_PORT_RANGE_START` | `9000` | Start of internal llama-server port pool used for proxied instances. |
+| `INTERNAL_PORT_RANGE_END` | `9020` | End of internal llama-server port pool used for proxied instances. |
 | `SECRET_KEY` | *(auto)* | Flask session secret. Auto-derived from machine-id if unset. |
 | `DATABASE_URL` | *(unset)* | MariaDB/MySQL connection string (e.g. `mysql+pymysql://user:pass@host/db`). Unset = JSON file storage. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks. |

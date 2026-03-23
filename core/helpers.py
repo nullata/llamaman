@@ -234,12 +234,18 @@ def is_port_available(port: int, host: str = "0.0.0.0") -> bool:
         sock.close()
 
 
-def find_available_port(exclude: set[int] | None = None) -> int | None:
+def find_available_port(
+    exclude: set[int] | None = None,
+    range_start: int | None = None,
+    range_end: int | None = None,
+) -> int | None:
     from core.state import instances, instances_lock
     from proxy import idle_proxies, idle_proxies_lock
     from config import PORT_RANGE_START, PORT_RANGE_END
 
     exclude = exclude or set()
+    range_start = PORT_RANGE_START if range_start is None else range_start
+    range_end = PORT_RANGE_END if range_end is None else range_end
     with instances_lock:
         used = set()
         for i in instances.values():
@@ -251,7 +257,9 @@ def find_available_port(exclude: set[int] | None = None) -> int | None:
         for p in idle_proxies.values():
             used.add(p["internal_port"])
     used |= exclude
-    for p in range(PORT_RANGE_START, PORT_RANGE_END + 1):
-        if p not in used:
+    for p in range(range_start, range_end + 1):
+        # Only return ports that are both untracked by LlamaMan and
+        # actually bindable on the host right now.
+        if p not in used and is_port_available(p):
             return p
     return None

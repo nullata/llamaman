@@ -12,7 +12,7 @@ from core.state import (
     downloads, downloads_lock,
     save_state,
 )
-from proxy import idle_proxies, idle_proxies_lock
+from proxy import idle_proxies, idle_proxies_lock, cleanup_orphan_idle_proxies, refresh_gate
 
 _last_cleanup_at: float = 0.0
 _CLEANUP_INTERVAL = 3600  # run at most once per hour
@@ -23,6 +23,7 @@ _ORPHAN_SCAN_INTERVAL = 60  # seconds
 
 def _run_cleanup() -> None:
     from storage import get_storage
+    from api.instances import release_instance_reservations
     cleanup = get_storage().get_settings().get("cleanup", {})
     changed = False
 
@@ -51,6 +52,7 @@ def _run_cleanup() -> None:
                 and inst.get("started_at", 0) < cutoff
             ]
             for iid in to_remove:
+                release_instance_reservations(iid)
                 del instances[iid]
                 logger.info("Cleanup: removed instance %s", iid)
         if to_remove:
@@ -92,6 +94,10 @@ def _background_poller():
         with instances_lock:
             inst_ids = list(instances.keys())
 
+        removed_orphans = cleanup_orphan_idle_proxies(set(inst_ids))
+        if removed_orphans:
+            logger.info("Proxy cleanup: removed %d orphan idle proxy listener(s)", removed_orphans)
+
         for inst_id in inst_ids:
             with instances_lock:
                 inst = instances.get(inst_id)
@@ -120,6 +126,7 @@ def _background_poller():
                         stats["crash_count"] = stats.get("crash_count", 0) + 1
                         logger.info("Instance %s auto-stopped (process died, crashes: %d)",
                                     inst_id, stats["crash_count"])
+                refresh_gate(inst_id)
                 save_state()
                 continue
 

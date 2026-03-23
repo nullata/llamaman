@@ -93,10 +93,14 @@ function renderInstances() {
       </div>`;
     }
 
+    const portLine = inst.internal_port != null
+      ? `Public ${inst.port} -> llama-server ${inst.internal_port}`
+      : `Port ${inst.port}`;
+
     card.innerHTML = `
     <div class="inst-info">
       <div class="model">${escHtml(inst.model_name)}</div>
-      <div class="meta">Port ${inst.port} &nbsp;·&nbsp; PID ${inst.pid} &nbsp;·&nbsp; ${uptime}</div>
+      <div class="meta">${portLine} &nbsp;·&nbsp; PID ${inst.pid} &nbsp;·&nbsp; ${uptime}</div>
       ${statsLine}
       ${queueLine}
     </div>
@@ -158,7 +162,10 @@ async function restartInstance(id) {
     const res = await apiFetch(`/api/instances/${id}/restart`, { method: 'POST' });
     const data = await res.json();
     if (res.ok) {
-      toast(`Instance restarted on port ${data.port}`, 'success');
+      const msg = data.internal_port != null
+        ? `Instance restarted: public ${data.port}, llama-server ${data.internal_port}`
+        : `Instance restarted on port ${data.port}`;
+      toast(msg, 'success');
       await pollInstances();
       await updatePortSuggestion();
     } else {
@@ -232,7 +239,10 @@ if (launchForm) launchForm.addEventListener('submit', async (e) => {
     });
     const data = await res.json();
     if (res.ok) {
-      toast(`Instance launched on port ${body.port}`, 'success');
+      const msg = data.internal_port != null
+        ? `Instance launched: public ${data.port}, llama-server ${data.internal_port}`
+        : `Instance launched on port ${data.port}`;
+      toast(msg, 'success');
       status.textContent = '';
       updatePortSuggestion();
       await pollInstances();

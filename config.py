@@ -11,6 +11,8 @@ DATA_DIR = os.environ.get("DATA_DIR", "/data")
 LOGS_DIR = os.environ.get("LOGS_DIR", "/tmp/llama-logs")
 PORT_RANGE_START = int(os.environ.get("PORT_RANGE_START", 8000))
 PORT_RANGE_END = int(os.environ.get("PORT_RANGE_END", 8020))
+INTERNAL_PORT_RANGE_START = int(os.environ.get("INTERNAL_PORT_RANGE_START", 9000))
+INTERNAL_PORT_RANGE_END = int(os.environ.get("INTERNAL_PORT_RANGE_END", 9020))
 
 PRESETS_FILE = os.path.join(DATA_DIR, "presets.json")
 LLAMAMAN_MAX_MODELS = int(os.environ.get("LLAMAMAN_MAX_MODELS", 0))

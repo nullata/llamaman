@@ -18,6 +18,7 @@ from core.state import instances, instances_lock
 
 _instance_gates: dict[str, "RequestGate"] = {}
 _shared_queue_gates: dict[str, "RequestGate"] = {}  # model_path -> gate
+_instance_gate_configs: dict[str, dict] = {}
 _gates_lock = threading.Lock()
 
 
@@ -32,32 +33,48 @@ class RequestGate:
     def __init__(self, max_concurrent: int, max_queue_depth: int = 200):
         self.max_concurrent = max_concurrent
         self.max_queue_depth = max_queue_depth
-        self._semaphore = threading.Semaphore(max_concurrent)
         self._waiting = 0
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
+        self._closed = False
         self.active = 0
         self.queued = 0
 
     def acquire(self, timeout: float = 300) -> bool:
-        with self._lock:
+        deadline = time.monotonic() + timeout
+        with self._condition:
+            if self._closed:
+                return False
             if self._waiting >= self.max_queue_depth:
                 return False
             self._waiting += 1
             self.queued = self._waiting
+            try:
+                while not self._closed and self.active >= self.max_concurrent:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    self._condition.wait(timeout=remaining)
 
-        got = self._semaphore.acquire(timeout=timeout)
+                if self._closed:
+                    return False
 
-        with self._lock:
-            self._waiting -= 1
-            if got:
                 self.active += 1
-            self.queued = self._waiting
-        return got
+                return True
+            finally:
+                self._waiting -= 1
+                self.queued = self._waiting
 
     def release(self):
-        with self._lock:
+        with self._condition:
             self.active = max(0, self.active - 1)
-        self._semaphore.release()
+            self._condition.notify()
+
+    def cancel(self):
+        """Wake queued waiters and prevent new acquires on this gate."""
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
 
 
 def get_gate(inst_id: str) -> "RequestGate | None":
@@ -80,11 +97,64 @@ def create_gate(inst_id: str, max_concurrent: int, max_queue_depth: int,
         else:
             gate = RequestGate(max_concurrent, max_queue_depth)
             _instance_gates[inst_id] = gate
+        _instance_gate_configs[inst_id] = {
+            "max_concurrent": max_concurrent,
+            "max_queue_depth": max_queue_depth,
+            "model_path": model_path,
+            "share_queue": share_queue,
+        }
 
 
 def remove_gate(inst_id: str):
     with _gates_lock:
-        _instance_gates.pop(inst_id, None)
+        gate = _instance_gates.pop(inst_id, None)
+        _instance_gate_configs.pop(inst_id, None)
+        if gate is None:
+            return
+        still_used = any(other_gate is gate for other_gate in _instance_gates.values())
+        if not still_used:
+            stale_models = [
+                model_path for model_path, shared_gate in _shared_queue_gates.items()
+                if shared_gate is gate
+            ]
+            for model_path in stale_models:
+                _shared_queue_gates.pop(model_path, None)
+            gate.cancel()
+
+
+def refresh_gate(inst_id: str):
+    """Replace a gate with a fresh object after a stop/crash so stale queued
+    state does not leak into the next launch on that instance/model."""
+    with _gates_lock:
+        gate = _instance_gates.get(inst_id)
+        config = _instance_gate_configs.get(inst_id)
+        if gate is None or not config:
+            return
+
+        related_ids = [iid for iid, other_gate in _instance_gates.items() if other_gate is gate]
+        active_peer_exists = False
+        with instances_lock:
+            for iid in related_ids:
+                if iid == inst_id:
+                    continue
+                peer = instances.get(iid)
+                if peer and peer.get("status") not in ("stopped", "sleeping"):
+                    active_peer_exists = True
+                    break
+        if active_peer_exists:
+            return
+
+        fresh_gate = RequestGate(
+            config["max_concurrent"],
+            config["max_queue_depth"],
+        )
+        for iid in related_ids:
+            _instance_gates[iid] = fresh_gate
+
+        if config.get("share_queue") and config.get("model_path"):
+            _shared_queue_gates[config["model_path"]] = fresh_gate
+
+        gate.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +203,7 @@ def make_proxy_app(inst_id: str, internal_port: int):
     waking it from sleep if necessary."""
     def proxy_app(environ, start_response):
         # Lazy import to break circular dependency
-        from api.instances import relaunch_sleeping_instance
+        from api.instances import relaunch_inactive_instance
 
         # Auth check - blocks the request if token is missing/invalid
         if _check_proxy_auth(environ, start_response):
@@ -150,8 +220,8 @@ def make_proxy_app(inst_id: str, internal_port: int):
             inst = instances.get(inst_id)
             status = inst["status"] if inst else "stopped"
 
-        if status == "sleeping":
-            if not relaunch_sleeping_instance(inst_id):
+        if status in ("sleeping", "stopped"):
+            if not relaunch_inactive_instance(inst_id):
                 start_response("503 Service Unavailable",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "failed to wake model"}).encode()]
@@ -233,3 +303,14 @@ def stop_idle_proxy(inst_id: str):
         except Exception:
             pass
         logger.info("Idle proxy stopped for instance %s", inst_id)
+
+
+def cleanup_orphan_idle_proxies(valid_instance_ids: set[str]) -> int:
+    """Stop proxy listeners whose instance records no longer exist."""
+    with idle_proxies_lock:
+        stale_ids = [inst_id for inst_id in idle_proxies if inst_id not in valid_instance_ids]
+
+    for inst_id in stale_ids:
+        stop_idle_proxy(inst_id)
+
+    return len(stale_ids)

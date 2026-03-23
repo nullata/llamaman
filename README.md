@@ -44,7 +44,7 @@ docker compose --profile rocm up --build llamaman-rocm
 
 - **Management UI**: http://localhost:5000
 - **Llamaman proxy** (Ollama-compatible API): http://localhost:42069
-- **llama-server instances**: ports 8000-8020
+- **llama-server public instance ports**: 8000-8020
 
 On first launch, visit the UI to create an admin account via `/setup`.
 
@@ -263,8 +263,10 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 | `MODELS_DIR` | `/models` | Directory scanned for model files |
 | `DATA_DIR` | `/data` | Directory for persistent config/state (JSON files) |
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs |
-| `PORT_RANGE_START` | `8000` | Start of llama-server port pool |
-| `PORT_RANGE_END` | `8020` | End of llama-server port pool |
+| `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool |
+| `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool |
+| `INTERNAL_PORT_RANGE_START` | `9000` | Start of internal llama-server port pool used when proxy mode is enabled |
+| `INTERNAL_PORT_RANGE_END` | `9020` | End of internal llama-server port pool used when proxy mode is enabled |
 | `LLAMAMAN_PROXY_PORT` | `42069` | Port for the Ollama-compatible proxy |
 | `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent **chat** models via the proxy (LRU eviction, 0 = unlimited) |
 | `LLAMAMAN_IDLE_TIMEOUT` | `0` | Idle timeout in minutes for proxy-managed instances (0 = disabled) |

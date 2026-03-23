@@ -9,7 +9,15 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
 
-from config import LOGS_DIR, PORT_RANGE_START, PORT_RANGE_END, HEALTH_CHECK_TIMEOUT, logger
+from config import (
+    HEALTH_CHECK_TIMEOUT,
+    INTERNAL_PORT_RANGE_END,
+    INTERNAL_PORT_RANGE_START,
+    LOGS_DIR,
+    PORT_RANGE_END,
+    PORT_RANGE_START,
+    logger,
+)
 from core.helpers import (
     build_llama_cmd, find_available_port, is_port_available, kill_instance_process,
     public_dict, read_log_file, stream_log_file,
@@ -18,7 +26,7 @@ from core.state import (
     instances, instances_lock, save_state,
 )
 from proxy import (
-    create_gate, get_gate, remove_gate,
+    create_gate, get_gate, remove_gate, refresh_gate,
     start_idle_proxy, stop_idle_proxy,
 )
 
@@ -28,6 +36,21 @@ bp = Blueprint("instances", __name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _public_instance(inst: dict) -> dict:
+    d = public_dict(inst)
+    d["last_request_at"] = inst.get("_last_request_at")
+    if inst.get("_internal_port") is not None:
+        d["internal_port"] = inst.get("_internal_port")
+    gate = get_gate(inst["id"])
+    if gate:
+        d["queue"] = {
+            "active": gate.active,
+            "queued": gate.queued,
+            "max_concurrent": gate.max_concurrent,
+            "max_queue_depth": gate.max_queue_depth,
+        }
+    return d
 
 def wait_for_healthy(port: int, timeout: float = 120) -> bool:
     deadline = time.monotonic() + timeout
@@ -42,23 +65,26 @@ def wait_for_healthy(port: int, timeout: float = 120) -> bool:
     return False
 
 
-def relaunch_sleeping_instance(inst_id: str) -> bool:
+def relaunch_inactive_instance(inst_id: str) -> bool:
     with instances_lock:
         inst = instances.get(inst_id)
-        if inst is None or inst["status"] != "sleeping":
+        if inst is None or inst["status"] not in ("sleeping", "stopped"):
             return inst is not None and inst["status"] in ("healthy", "starting")
 
+        prior_status = inst["status"]
         config = inst["config"]
         model_path = inst["model_path"]
         internal_port = inst.get("_internal_port", inst["port"])
         gpu_devices = config.get("gpu_devices")
+
+    refresh_gate(inst_id)
 
     log_file = os.path.join(LOGS_DIR, f"{inst_id}.log")
     cmd = build_llama_cmd(model_path, internal_port, config)
 
     if not is_port_available(internal_port):
         logger.warning(
-            "Cannot relaunch sleeping instance %s: port %d is already occupied",
+            "Cannot relaunch inactive instance %s: port %d is already occupied",
             inst_id, internal_port,
         )
         with instances_lock:
@@ -72,7 +98,10 @@ def relaunch_sleeping_instance(inst_id: str) -> bool:
     if gpu_devices:
         env["CUDA_VISIBLE_DEVICES"] = gpu_devices
 
-    logger.info("Relaunching sleeping instance %s on internal port %d", inst_id, internal_port)
+    logger.info(
+        "Relaunching %s instance %s on server port %d",
+        prior_status, inst_id, internal_port,
+    )
 
     try:
         log_fh = open(log_file, "a")
@@ -109,6 +138,10 @@ def relaunch_sleeping_instance(inst_id: str) -> bool:
     return True
 
 
+def relaunch_sleeping_instance(inst_id: str) -> bool:
+    return relaunch_inactive_instance(inst_id)
+
+
 # ---------------------------------------------------------------------------
 # Launch / Stop / Sleep
 # ---------------------------------------------------------------------------
@@ -125,7 +158,11 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
 
     needs_proxy = idle_timeout_min > 0 or max_concurrent > 0
     if needs_proxy:
-        internal_port = find_available_port(exclude={port})
+        internal_port = find_available_port(
+            exclude={port},
+            range_start=INTERNAL_PORT_RANGE_START,
+            range_end=INTERNAL_PORT_RANGE_END,
+        )
         if internal_port is None:
             return None, "no internal ports available for proxy"
         server_port = internal_port
@@ -221,8 +258,7 @@ def stop_instance_by_id(inst_id: str) -> bool:
             return False
         kill_instance_process(inst)
         inst["status"] = "stopped"
-    stop_idle_proxy(inst_id)
-    remove_gate(inst_id)
+    release_instance_reservations(inst_id)
     save_state()
     return True
 
@@ -234,9 +270,36 @@ def sleep_instance_by_id(inst_id: str) -> bool:
             return False
         kill_instance_process(inst)
         inst["status"] = "sleeping"
+    refresh_gate(inst_id)
     save_state()
     logger.info("Instance %s put to sleep (idle timeout)", inst_id)
     return True
+
+
+def _restore_restarted_instance(old: dict) -> None:
+    """Restore a removed instance record if restart launch fails."""
+    with instances_lock:
+        instances[old["id"]] = old
+
+    if old["status"] == "sleeping":
+        internal_port = old.get("_internal_port")
+        if internal_port:
+            start_idle_proxy(old["id"], old["port"], internal_port)
+        max_concurrent = old.get("config", {}).get("max_concurrent", 0)
+        if max_concurrent > 0:
+            create_gate(
+                old["id"],
+                max_concurrent,
+                old.get("config", {}).get("max_queue_depth", 200),
+                model_path=old["model_path"],
+                share_queue=old.get("config", {}).get("share_queue", False),
+            )
+
+
+def release_instance_reservations(inst_id: str) -> None:
+    """Release proxy/gate resources tied to a public instance port."""
+    stop_idle_proxy(inst_id)
+    remove_gate(inst_id)
 
 
 # ---------------------------------------------------------------------------
@@ -254,19 +317,7 @@ def api_next_port():
 @bp.route("/api/instances", methods=["GET"])
 def api_instances_list():
     with instances_lock:
-        safe = []
-        for inst in instances.values():
-            d = public_dict(inst)
-            d["last_request_at"] = inst.get("_last_request_at")
-            gate = get_gate(inst["id"])
-            if gate:
-                d["queue"] = {
-                    "active": gate.active,
-                    "queued": gate.queued,
-                    "max_concurrent": gate.max_concurrent,
-                    "max_queue_depth": gate.max_queue_depth,
-                }
-            safe.append(d)
+        safe = [_public_instance(inst) for inst in instances.values()]
     return jsonify(safe)
 
 
@@ -295,7 +346,7 @@ def api_instances_create():
     if err:
         code = 409 if "already in use" in err else 500
         return jsonify({"error": err}), code
-    return jsonify(public_dict(inst)), 201
+    return jsonify(_public_instance(inst)), 201
 
 
 @bp.route("/api/instances/<inst_id>", methods=["DELETE"])
@@ -313,18 +364,31 @@ def api_instances_restart(inst_id):
             return jsonify({"error": "Not found"}), 404
         if old["status"] not in ("stopped", "sleeping"):
             return jsonify({"error": "Instance must be stopped or sleeping before restarting"}), 409
+        old = {
+            **old,
+            "config": dict(old.get("config", {})),
+            "stats": dict(old.get("stats", {})),
+        }
         model_path = old["model_path"]
         config = old["config"]
+        preferred_port = old["port"]
 
+    # Release any old proxy/gate reservations before we pick ports for the
+    # replacement instance. This lets restarts reuse the same public port and
+    # avoids stale reservations influencing internal-port selection.
+    release_instance_reservations(inst_id)
     with instances_lock:
-        used = {i["port"] for i in instances.values() if i["status"] not in ("stopped",)}
-    port = old["port"] if old["port"] not in used else None
+        instances.pop(inst_id, None)
+
+    port = preferred_port if is_port_available(preferred_port) else None
     if port is None:
         for p in range(PORT_RANGE_START, PORT_RANGE_END + 1):
-            if p not in used:
+            if is_port_available(p):
                 port = p
                 break
     if port is None:
+        _restore_restarted_instance(old)
+        save_state()
         return jsonify({"error": "No ports available"}), 409
 
     inst, err = launch_instance(
@@ -343,15 +407,12 @@ def api_instances_restart(inst_id):
         embedding_model=config.get("embedding_model", False),
     )
     if err:
-        return jsonify({"error": err}), 500
+        _restore_restarted_instance(old)
+        save_state()
+        code = 409 if "already in use" in err else 500
+        return jsonify({"error": err}), code
 
-    stop_idle_proxy(inst_id)
-    remove_gate(inst_id)
-    with instances_lock:
-        instances.pop(inst_id, None)
-
-    save_state()
-    return jsonify(public_dict(inst)), 201
+    return jsonify(_public_instance(inst)), 201
 
 
 @bp.route("/api/instances/<inst_id>", methods=["GET"])
@@ -360,16 +421,7 @@ def api_instances_get(inst_id):
         inst = instances.get(inst_id)
         if inst is None:
             return jsonify({"error": "Not found"}), 404
-        d = public_dict(inst)
-        d["last_request_at"] = inst.get("_last_request_at")
-        gate = get_gate(inst_id)
-        if gate:
-            d["queue"] = {
-                "active": gate.active,
-                "queued": gate.queued,
-                "max_concurrent": gate.max_concurrent,
-                "max_queue_depth": gate.max_queue_depth,
-            }
+        d = _public_instance(inst)
     return jsonify(d)
 
 
@@ -381,7 +433,9 @@ def api_instances_remove(inst_id):
             return jsonify({"error": "Not found"}), 404
         if inst["status"] not in ("stopped",):
             return jsonify({"error": "Instance must be stopped before removing"}), 409
-        del instances[inst_id]
+    release_instance_reservations(inst_id)
+    with instances_lock:
+        instances.pop(inst_id, None)
     save_state()
     return jsonify({"status": "removed"})
 
