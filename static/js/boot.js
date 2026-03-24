@@ -49,6 +49,7 @@ const params = new URLSearchParams(window.location.search);
 const presetModelPath = params.get('model_path');
 if (presetModelPath && modelPathField) {
   modelPathField.value = presetModelPath;
+  if (typeof setActiveTab === 'function') setActiveTab('settings', 'launch');
   updateGpuLayersTotal(presetModelPath);
 }
 

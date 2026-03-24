@@ -12,9 +12,15 @@ let allModels = [];           // cached model list for filtering
 // Collapsible sections (persisted in localStorage)
 // -------------------------------------------------------------------------
 const SECTION_STORAGE_KEY = 'llamaman-sections';
+const TAB_STORAGE_KEY = 'llamaman-tabs';
 
 function loadSectionStates() {
   try { return JSON.parse(localStorage.getItem(SECTION_STORAGE_KEY)) || {}; }
+  catch { return {}; }
+}
+
+function loadTabStates() {
+  try { return JSON.parse(localStorage.getItem(TAB_STORAGE_KEY)) || {}; }
   catch { return {}; }
 }
 
@@ -22,6 +28,34 @@ function saveSectionState(section, collapsed) {
   const states = loadSectionStates();
   states[section] = collapsed;
   localStorage.setItem(SECTION_STORAGE_KEY, JSON.stringify(states));
+}
+
+function saveTabState(group, tab) {
+  const states = loadTabStates();
+  states[group] = tab;
+  localStorage.setItem(TAB_STORAGE_KEY, JSON.stringify(states));
+}
+
+function setActiveTab(group, tab) {
+  const root = document.querySelector(`.tabbed-card[data-tab-group="${group}"]`);
+  if (!root) return;
+
+  let found = false;
+  root.querySelectorAll('.settings-tab[data-tab]').forEach(btn => {
+    const active = btn.dataset.tab === tab;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', active ? 'true' : 'false');
+    btn.setAttribute('tabindex', active ? '0' : '-1');
+    if (active) found = true;
+  });
+
+  if (!found) return;
+
+  root.querySelectorAll('.tab-panel[data-tab-panel]').forEach(panel => {
+    panel.hidden = panel.dataset.tabPanel !== tab;
+  });
+
+  saveTabState(group, tab);
 }
 
 function toggleSection(section) {
@@ -57,6 +91,33 @@ function restoreSectionStates() {
   }
 }
 
+function initTabs() {
+  const tabStates = loadTabStates();
+  document.querySelectorAll('.tabbed-card[data-tab-group]').forEach(root => {
+    const group = root.dataset.tabGroup;
+    const buttons = [...root.querySelectorAll('.settings-tab[data-tab]')];
+    if (buttons.length === 0) return;
+
+    buttons.forEach((btn, index) => {
+      btn.addEventListener('click', () => setActiveTab(group, btn.dataset.tab));
+      btn.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+        e.preventDefault();
+        const direction = e.key === 'ArrowRight' ? 1 : -1;
+        const next = buttons[(index + direction + buttons.length) % buttons.length];
+        next.focus();
+        setActiveTab(group, next.dataset.tab);
+      });
+    });
+
+    const savedTab = tabStates[group];
+    const defaultTab = root.dataset.defaultTab || buttons[0].dataset.tab;
+    const initialTab = buttons.some(btn => btn.dataset.tab === savedTab) ? savedTab : defaultTab;
+    setActiveTab(group, initialTab);
+  });
+}
+
+initTabs();
 restoreSectionStates();
 
 // -------------------------------------------------------------------------

@@ -366,6 +366,10 @@ header span {
   grid-column: 1 / -1;
 }
 
+.cleanup-last-ran {
+  margin-top: 6px;
+}
+
 .toggle-switch {
   position: relative;
   display: inline-flex;
@@ -695,6 +699,44 @@ select option {
 }
 
 .collapsible-body.hidden {
+  display: none;
+}
+
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.settings-tab {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font: inherit;
+  transition: color .15s, border-color .15s, background .15s;
+}
+
+.settings-tab:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.settings-tab.active {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.45);
+  color: var(--text);
+}
+
+.settings-tab:focus-visible {
+  outline: 2px solid rgba(16, 185, 129, 0.45);
+  outline-offset: 2px;
+}
+
+.tab-panel[hidden] {
   display: none;
 }
 
