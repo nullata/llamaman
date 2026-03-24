@@ -102,25 +102,55 @@ def _read_gguf_value(f, vtype: int):
     raise ValueError(f"Unknown GGUF type: {vtype}")
 
 
-def get_gguf_layer_count(filepath: str) -> int | None:
+def get_gguf_metadata(filepath: str) -> dict:
+    """Read key architecture metadata from a GGUF file for layer/VRAM calculation.
+
+    Returns a dict with fields: block_count, embedding_length, feed_forward_length,
+    head_count, head_count_kv, vocab_size (all int or None if not found).
+    """
+    meta: dict = {
+        "block_count": None,
+        "embedding_length": None,
+        "feed_forward_length": None,
+        "head_count": None,
+        "head_count_kv": None,
+        "vocab_size": None,
+    }
+    _required = {"block_count", "embedding_length", "feed_forward_length", "head_count"}
+    _wanted = _required | {"head_count_kv", "vocab_size"}
+    _found: set[str] = set()
     try:
         with open(filepath, "rb") as f:
-            magic = f.read(4)
-            if magic != b"GGUF":
-                return None
-            struct.unpack("<I", f.read(4))   # version (skip)
-            struct.unpack("<Q", f.read(8))  # tensor_count (skip)
-            metadata_kv_count = struct.unpack("<Q", f.read(8))[0]
-
-            for _ in range(metadata_kv_count):
+            if f.read(4) != b"GGUF":
+                return meta
+            struct.unpack("<I", f.read(4))   # version
+            struct.unpack("<Q", f.read(8))   # tensor_count
+            kv_count = struct.unpack("<Q", f.read(8))[0]
+            for _ in range(kv_count):
                 key = _read_gguf_string(f)
                 vtype = struct.unpack("<I", f.read(4))[0]
                 value = _read_gguf_value(f, vtype)
                 if key.endswith(".block_count"):
-                    return int(value)
+                    meta["block_count"] = int(value); _found.add("block_count")
+                elif key.endswith(".embedding_length"):
+                    meta["embedding_length"] = int(value); _found.add("embedding_length")
+                elif key.endswith(".feed_forward_length"):
+                    meta["feed_forward_length"] = int(value); _found.add("feed_forward_length")
+                elif key.endswith(".attention.head_count"):
+                    meta["head_count"] = int(value); _found.add("head_count")
+                elif key.endswith(".attention.head_count_kv"):
+                    meta["head_count_kv"] = int(value); _found.add("head_count_kv")
+                elif key.endswith(".vocab_size"):
+                    meta["vocab_size"] = int(value); _found.add("vocab_size")
+                if _found >= _wanted:
+                    break
+                # Once past architecture keys into tokenizer arrays, stop if
+                # all required fields are already found.
+                if key.startswith("tokenizer.") and _required <= _found:
+                    break
     except Exception:
-        return None
-    return None
+        pass
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -182,8 +212,10 @@ def api_model_layers():
         return jsonify({"error": "path is required"}), 400
     if not model_path.lower().endswith(".gguf"):
         return jsonify({"layers": None})
-    layers = get_gguf_layer_count(model_path)
-    return jsonify({"layers": layers})
+    meta = get_gguf_metadata(model_path)
+    meta["layers"] = meta["block_count"]  # backward-compat alias
+    meta["quant"] = detect_quant(Path(model_path).stem)
+    return jsonify(meta)
 
 
 @bp.route("/api/disk-space")
