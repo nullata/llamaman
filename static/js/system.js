@@ -66,16 +66,30 @@ async function loadGpuInfo() {
     container.innerHTML = '';
 
     data.gpus.forEach(gpu => {
-      const pct = Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100);
-      const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+      const vramPct = Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100);
+      const vramColor = vramPct > 90 ? 'var(--red)' : vramPct > 70 ? 'var(--yellow)' : 'var(--green)';
+      const corePct = gpu.utilization_pct ?? 0;
+      const coreColor = corePct > 90 ? 'var(--red)' : corePct > 70 ? 'var(--yellow)' : 'var(--green)';
       const row = document.createElement('div');
       row.className = 'gpu-bar-row';
       row.innerHTML = `
         <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index}</span>
-        <div class="gpu-bar-track">
-          <div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.75em;width:3em;color:var(--muted);">core</span>
+            <div class="gpu-bar-track" style="flex:1;">
+              <div class="gpu-bar-fill" style="width:${corePct}%;background:${coreColor};"></div>
+            </div>
+            <span class="gpu-bar-text" style="width:3.5em;">${corePct}%</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.75em;width:3em;color:var(--muted);">VRAM</span>
+            <div class="gpu-bar-track" style="flex:1;">
+              <div class="gpu-bar-fill" style="width:${vramPct}%;background:${vramColor};"></div>
+            </div>
+            <span class="gpu-bar-text" style="width:3.5em;">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
+          </div>
         </div>
-        <span class="gpu-bar-text">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB (${pct}%)</span>
       `;
       container.appendChild(row);
     });
