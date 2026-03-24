@@ -1,5 +1,6 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import json
 import os
 import sys
 import time
@@ -10,10 +11,51 @@ repo_id = os.environ["HF_REPO_ID"]
 local_dir = os.environ["HF_LOCAL_DIR"]
 filename = os.environ.get("HF_FILENAME", "").strip()
 token = os.environ.get("HF_TOKEN", "").strip() or None
-speed_limit = int(os.environ.get("HF_SPEED_LIMIT", "0"))  # bytes/sec, 0=unlimited
+speed_limit = int(os.environ.get("HF_SPEED_LIMIT", "0"))        # effective at launch (for log)
+per_model_limit = int(os.environ.get("HF_PER_MODEL_SPEED_LIMIT", "0"))  # per-model fallback
+
+_SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "/data"), "settings.json")
 
 CHUNK_SIZE = 64 * 1024  # 64 KB
 HF_API = "https://huggingface.co"
+
+
+def _read_global_speed_limit() -> int:
+    """Read the current global speed limit directly from settings.json (bytes/sec).
+
+    Reading settings.json directly means any save from the UI is picked up
+    within 1 second by running downloads, with no separate control file needed.
+
+    Returns:
+        > 0  - global limit active
+          0  - global limit explicitly disabled
+         -1  - settings.json missing or unreadable (non-JSON backend or first run)
+    """
+    try:
+        with open(_SETTINGS_FILE) as f:
+            s = json.load(f)
+        mbps = float(s.get("global_speed_limit_mbps", 0) or 0)
+        return int(mbps * 1_000_000 / 8) if mbps > 0 else 0
+    except FileNotFoundError:
+        return -1
+    except Exception:
+        return -1
+
+
+def _effective_limit() -> int:
+    """Return the current effective speed limit in bytes/sec (0 = unlimited).
+
+    Priority:
+      1. Global setting from settings.json if > 0
+      2. Per-model limit if global is explicitly 0
+      3. Launch-time effective limit (speed_limit) if settings.json is unreadable
+    """
+    g = _read_global_speed_limit()
+    if g > 0:
+        return g
+    if g == 0:
+        return per_model_limit
+    return speed_limit  # settings.json unreadable → launch-time fallback
 
 
 def _headers():
@@ -32,26 +74,44 @@ def _fmt_size(n):
 
 
 def _throttled_iter(resp):
-    """Yield chunks, sleeping as needed to enforce speed_limit."""
-    if speed_limit <= 0:
-        yield from resp.iter_content(chunk_size=CHUNK_SIZE)
-        return
-    bucket = float(speed_limit)
+    """Yield chunks, throttling to the current effective speed limit.
+
+    Re-reads the global speed limit control file every second so that changes
+    made in the UI take effect immediately on running downloads.
+    Token bucket: when the limit changes, the bucket resets to the new rate.
+    """
+    lim = _effective_limit()
+    last_check = time.monotonic()
     last = time.monotonic()
+    bucket = float(lim) if lim > 0 else 0.0
+
     for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
         if not chunk:
             continue
-        nbytes = len(chunk)
         now = time.monotonic()
-        bucket += (now - last) * speed_limit
-        if bucket > speed_limit:
-            bucket = float(speed_limit)
-        last = now
-        bucket -= nbytes
-        if bucket < 0:
-            time.sleep(-bucket / speed_limit)
-            bucket = 0.0
-            last = time.monotonic()
+
+        # Re-read limit every second
+        if now - last_check >= 1.0:
+            new_lim = _effective_limit()
+            if new_lim != lim:
+                lim = new_lim
+                bucket = float(lim) if lim > 0 else 0.0
+            last_check = now
+
+        if lim > 0:
+            nbytes = len(chunk)
+            bucket += (now - last) * lim
+            if bucket > lim:
+                bucket = float(lim)
+            last = now
+            bucket -= nbytes
+            if bucket < 0:
+                time.sleep(-bucket / lim)
+                bucket = 0.0
+                last = time.monotonic()
+        else:
+            last = now  # keep last current so bucket math is correct if limit is set later
+
         yield chunk
 
 

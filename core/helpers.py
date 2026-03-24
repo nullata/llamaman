@@ -3,6 +3,7 @@
 import json
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -31,6 +32,22 @@ def format_size(size_bytes: int) -> str:
 
 def public_dict(d: dict) -> dict:
     return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+def cleanup_download_dir(dest_path: str) -> None:
+    """Delete a partial/failed download directory, guarded to stay inside MODELS_DIR."""
+    from config import MODELS_DIR
+    try:
+        real_dest = os.path.realpath(dest_path)
+        real_models = os.path.realpath(MODELS_DIR)
+        if not real_dest.startswith(real_models + os.sep) and real_dest != real_models:
+            return  # never delete outside models dir
+        if os.path.isdir(real_dest):
+            shutil.rmtree(real_dest)
+        elif os.path.isfile(real_dest):
+            os.remove(real_dest)
+    except Exception:
+        pass
 
 
 def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:

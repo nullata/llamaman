@@ -7,8 +7,6 @@ if [[ ! -f ${versionFile} ]]; then
     exit 1
 fi
 
-
-
 version=$(cat ${versionFile})
 docker build -f Dockerfile.cuda \
   -t nullata/llamaman:cuda-latest \

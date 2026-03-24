@@ -6,7 +6,7 @@ import time
 import requests
 
 from config import LLAMAMAN_IDLE_TIMEOUT, HEALTH_CHECK_TIMEOUT, logger
-from core.helpers import is_pid_alive, kill_instance_process, is_llama_pid
+from core.helpers import cleanup_download_dir, is_pid_alive, kill_instance_process, is_llama_pid
 from core.state import (
     instances, instances_lock,
     downloads, downloads_lock,
@@ -24,12 +24,16 @@ _ORPHAN_SCAN_INTERVAL = 60  # seconds
 def _run_cleanup() -> None:
     from storage import get_storage
     from api.instances import release_instance_reservations
-    cleanup = get_storage().get_settings().get("cleanup", {})
+    storage = get_storage()
+    cleanup = storage.get_settings().get("cleanup", {})
     changed = False
+    cleanup_patch = {}
+    now = time.time()
 
     if cleanup.get("downloads_enabled"):
+        cleanup_patch["downloads_last_run_at"] = now
         max_age_s = (cleanup.get("downloads_max_age_hours") or 24) * 3600
-        cutoff = time.time() - max_age_s
+        cutoff = now - max_age_s
         with downloads_lock:
             to_remove = [
                 did for did, dl in downloads.items()
@@ -43,8 +47,9 @@ def _run_cleanup() -> None:
             changed = True
 
     if cleanup.get("instances_enabled"):
+        cleanup_patch["instances_last_run_at"] = now
         max_age_s = (cleanup.get("instances_max_age_hours") or 24) * 3600
-        cutoff = time.time() - max_age_s
+        cutoff = now - max_age_s
         with instances_lock:
             to_remove = [
                 iid for iid, inst in instances.items()
@@ -60,6 +65,8 @@ def _run_cleanup() -> None:
 
     if changed:
         save_state()
+    if cleanup_patch:
+        storage.merge_settings({"cleanup": cleanup_patch})
 
 
 
@@ -209,12 +216,18 @@ def _background_poller():
             if exit_code is None:
                 continue
 
+            dest_path = ""
             with downloads_lock:
                 dl = downloads.get(dl_id)
                 if dl and dl["status"] not in ("cancelled",):
                     kill_instance_process(dl)
                     dl["status"] = "completed" if exit_code == 0 else "failed"
+                    if exit_code != 0:
+                        dest_path = dl.get("dest_path", "")
             save_state()
+            if dest_path:
+                cleanup_download_dir(dest_path)
+                logger.info("Download %s failed - cleaned up %s", dl_id, dest_path)
 
 
 def start_background_poller():
