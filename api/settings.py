@@ -15,5 +15,5 @@ def get_settings():
 @bp.route("/api/settings", methods=["POST"])
 def save_settings():
     data = request.get_json(silent=True) or {}
-    get_storage().save_settings(data)
-    return jsonify({"ok": True})
+    settings = get_storage().merge_settings(data)
+    return jsonify({"ok": True, "settings": settings})

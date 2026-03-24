@@ -72,6 +72,11 @@ class StorageBackend(ABC):
         """Persist the global settings dict."""
         ...
 
+    @abstractmethod
+    def merge_settings(self, patch: dict) -> dict:
+        """Recursively merge a partial settings patch and return the updated settings."""
+        ...
+
     # -- API Keys --
 
     @abstractmethod

@@ -6,10 +6,21 @@ import logging
 import os
 import tempfile
 import threading
+from copy import deepcopy
 
 from storage.base import StorageBackend
 
 logger = logging.getLogger("llamaman")
+
+
+def _merge_dicts(base: dict, patch: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 def _atomic_write_json(path: str, data: dict) -> None:
@@ -44,6 +55,7 @@ class JsonBackend(StorageBackend):
             os.path.dirname(settings_file), "api_keys.json"
         )
         self._state_lock = threading.Lock()
+        self._settings_lock = threading.Lock()
 
     # -- State helpers --
 
@@ -116,14 +128,27 @@ class JsonBackend(StorageBackend):
     # -- Settings --
 
     def get_settings(self) -> dict:
-        try:
-            with open(self._settings_file, "r") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            return {}
+        with self._settings_lock:
+            try:
+                with open(self._settings_file, "r") as f:
+                    return json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                return {}
 
     def save_settings(self, settings: dict) -> None:
-        _atomic_write_json(self._settings_file, settings)
+        with self._settings_lock:
+            _atomic_write_json(self._settings_file, settings)
+
+    def merge_settings(self, patch: dict) -> dict:
+        with self._settings_lock:
+            try:
+                with open(self._settings_file, "r") as f:
+                    current = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                current = {}
+            merged = _merge_dicts(current, patch)
+            _atomic_write_json(self._settings_file, merged)
+            return merged
 
     # -- API Keys --
 

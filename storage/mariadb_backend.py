@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+from copy import deepcopy
 
 from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, Text, func
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
@@ -12,6 +13,16 @@ from storage.base import StorageBackend
 logger = logging.getLogger("llamaman")
 
 Base = declarative_base()
+
+
+def _merge_dicts(base: dict, patch: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge_dicts(merged[key], value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +215,24 @@ class MariaDBBackend(StorageBackend):
             else:
                 session.add(SettingsRow(key="global", data=json.dumps(settings)))
             session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            self._session_factory.remove()
+
+    def merge_settings(self, patch: dict) -> dict:
+        session = self._session()
+        try:
+            row = session.get(SettingsRow, "global")
+            current = json.loads(row.data) if row else {}
+            merged = _merge_dicts(current, patch)
+            if row:
+                row.data = json.dumps(merged)
+            else:
+                session.add(SettingsRow(key="global", data=json.dumps(merged)))
+            session.commit()
+            return merged
         except Exception:
             session.rollback()
             raise

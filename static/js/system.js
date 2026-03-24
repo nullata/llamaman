@@ -125,6 +125,12 @@ async function loadSettings() {
       authToggle.checked = s.require_auth !== false; // default ON
       updateAuthHint();
     }
+
+    const speedLimit = document.getElementById('s-global-speed-limit');
+    if (speedLimit) speedLimit.value = s.global_speed_limit_mbps ?? 0;
+  } catch (e) {}
+}
+
 async function refreshCleanupLastRan() {
   try {
     const dlLabel = document.getElementById('s-dl-cleanup-last-ran');
@@ -327,3 +333,27 @@ if (btnCloseApiKeyModal) btnCloseApiKeyModal.addEventListener('click', () => api
 if (apiKeyModal) apiKeyModal.addEventListener('click', (e) => {
   if (e.target === apiKeyModal) apiKeyModal.classList.remove('open');
 });
+
+// -------------------------------------------------------------------------
+// Download Settings (global speed limit)
+// -------------------------------------------------------------------------
+async function saveDownloadSettings() {
+  const limitMbps = parseFloat(document.getElementById('s-global-speed-limit').value) || 0;
+  try {
+    const res = await apiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ global_speed_limit_mbps: limitMbps }),
+    });
+    if (res && res.ok) {
+      const status = document.getElementById('download-settings-status');
+      status.textContent = limitMbps > 0 ? `Saved - ${limitMbps} Mbps limit active` : 'Saved - unlimited';
+      setTimeout(() => { status.textContent = ''; }, 3000);
+    }
+  } catch (e) {
+    toast('Error saving download settings: ' + e.message, 'error');
+  }
+}
+
+const btnSaveDownloadSettings = document.getElementById('btn-save-download-settings');
+if (btnSaveDownloadSettings) btnSaveDownloadSettings.addEventListener('click', saveDownloadSettings);

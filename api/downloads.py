@@ -10,9 +10,10 @@ from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request
 
-from config import LOGS_DIR, MODELS_DIR, logger
-from core.helpers import kill_instance_process, public_dict, read_log_file, stream_log_file
+from config import DATA_DIR, LOGS_DIR, MODELS_DIR, logger
+from core.helpers import cleanup_download_dir, kill_instance_process, public_dict, read_log_file, stream_log_file
 from core.state import downloads, downloads_lock, save_state
+from storage import get_storage
 
 bp = Blueprint("downloads", __name__)
 
@@ -37,7 +38,11 @@ def api_downloads_create():
 
     filename = body.get("filename", "").strip()
     token = body.get("hf_token", "").strip()
-    speed_limit_mbps = body.get("speed_limit_mbps", 0)
+    per_model_mbps = float(body.get("speed_limit_mbps", 0) or 0)
+
+    # Compute effective initial limit (global overrides per-model at launch time)
+    global_mbps = float(get_storage().get_settings().get("global_speed_limit_mbps", 0) or 0)
+    effective_mbps = global_mbps if global_mbps > 0 else per_model_mbps
 
     dest_name = repo_id.split("/")[-1]
     if filename:
@@ -54,7 +59,9 @@ def api_downloads_create():
         "HF_LOCAL_DIR": dest_path,
         "HF_FILENAME": filename,
         "HF_TOKEN": token,
-        "HF_SPEED_LIMIT": str(int(float(speed_limit_mbps) * 1_000_000 / 8)) if speed_limit_mbps else "0",
+        "HF_SPEED_LIMIT": str(int(effective_mbps * 1_000_000 / 8)) if effective_mbps else "0",
+        "HF_PER_MODEL_SPEED_LIMIT": str(int(per_model_mbps * 1_000_000 / 8)) if per_model_mbps else "0",
+        "DATA_DIR": DATA_DIR,
         "PYTHONUNBUFFERED": "1",
     }
 
@@ -106,9 +113,12 @@ def api_downloads_cancel(dl_id):
         dl = downloads.get(dl_id)
         if dl is None:
             return jsonify({"error": "Not found"}), 404
+        dest_path = dl.get("dest_path", "")
         kill_instance_process(dl)
         dl["status"] = "cancelled"
 
+    if dest_path:
+        cleanup_download_dir(dest_path)
     save_state()
     return jsonify({"status": "cancelled"})
 
