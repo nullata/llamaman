@@ -386,8 +386,10 @@ Leave `filename` blank to download the full repository.
   "cleanup": {
     "downloads_enabled": true,
     "downloads_max_age_hours": 24,
+    "downloads_last_run_at": 1710000000,
     "instances_enabled": false,
-    "instances_max_age_hours": 48
+    "instances_max_age_hours": 48,
+    "instances_last_run_at": 1710000000
   }
 }
 ```

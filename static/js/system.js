@@ -117,12 +117,25 @@ async function loadSettings() {
     document.getElementById('s-dl-cleanup-age').value = c.downloads_max_age_hours ?? 24;
     document.getElementById('s-inst-cleanup-enabled').checked = !!c.instances_enabled;
     document.getElementById('s-inst-cleanup-age').value = c.instances_max_age_hours ?? 24;
+    renderCleanupLastRan('s-dl-cleanup-last-ran', c.downloads_last_run_at);
+    renderCleanupLastRan('s-inst-cleanup-last-ran', c.instances_last_run_at);
 
     const authToggle = document.getElementById('s-require-auth');
     if (authToggle) {
       authToggle.checked = s.require_auth !== false; // default ON
       updateAuthHint();
     }
+async function refreshCleanupLastRan() {
+  try {
+    const dlLabel = document.getElementById('s-dl-cleanup-last-ran');
+    const instLabel = document.getElementById('s-inst-cleanup-last-ran');
+    if (!dlLabel && !instLabel) return;
+    const res = await apiFetch('/api/settings');
+    if (!res) return;
+    const s = await res.json();
+    const c = s.cleanup || {};
+    renderCleanupLastRan('s-dl-cleanup-last-ran', c.downloads_last_run_at);
+    renderCleanupLastRan('s-inst-cleanup-last-ran', c.instances_last_run_at);
   } catch (e) {}
 }
 
@@ -148,6 +161,21 @@ async function saveSettings() {
       setTimeout(() => { status.textContent = ''; }, 2000);
     }
   } catch (e) {}
+}
+
+function renderCleanupLastRan(elementId, ts) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  if (!ts) {
+    el.textContent = 'Never';
+    return;
+  }
+  const date = new Date(ts * 1000);
+  if (Number.isNaN(date.getTime())) {
+    el.textContent = 'Never';
+    return;
+  }
+  el.textContent = date.toLocaleString();
 }
 
 function updateAuthHint() {

@@ -36,6 +36,9 @@ setInterval(loadSystemInfo, 10000);
 // GPU VRAM refresh (every 15s)
 setInterval(loadGpuInfo, 15000);
 
+// Cleanup metadata refresh (every 60s)
+setInterval(refreshCleanupLastRan, 60000);
+
 // Initial load
 loadModels();
 loadSystemInfo();
