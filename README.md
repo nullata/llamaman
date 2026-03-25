@@ -48,50 +48,6 @@ docker compose --profile rocm up --build llamaman-rocm
 
 On first launch, visit the UI to create an admin account via `/setup`.
 
-## Project Structure
-
-```
-llamaman/
-├── app.py                # Flask app factory + llamaman proxy startup
-├── config.py             # Environment variable config + constants
-├── gunicorn.conf.py      # Gunicorn configuration
-├── requirements.txt      # Python dependencies
-├── Dockerfile.cuda       # NVIDIA CUDA image (default)
-├── Dockerfile.rocm       # AMD ROCm image (experimental)
-├── docker-compose.yml    # Standalone compose (CUDA default + ROCm profile)
-├── VERSION               # Version string (read at startup)
-├── api/
-│   ├── auth.py           # Login/setup routes + before_request auth hook
-│   ├── api_keys.py       # Bearer token CRUD
-│   ├── llamaman.py       # Ollama-compatible API proxy (auto-start models)
-│   ├── instances.py      # Instance CRUD + launch/stop
-│   ├── downloads.py      # HuggingFace download manager
-│   ├── models.py         # Model discovery + deletion
-│   ├── presets.py        # Per-model preset configs
-│   ├── settings.py       # Global settings
-│   └── system_info.py    # CPU/RAM/GPU info
-├── core/
-│   ├── helpers.py        # Process management, port checks, command building
-│   ├── monitoring.py     # Background health poller + idle timeout
-│   ├── state.py          # In-memory state + persistence
-│   └── downloader.py     # HuggingFace download subprocess
-├── proxy/
-│   └── __init__.py       # Per-instance WSGI proxy + concurrency gate
-├── storage/
-│   ├── base.py           # Abstract storage interface
-│   ├── json_backend.py   # JSON file storage (default)
-│   └── mariadb_backend.py # MariaDB/MySQL storage (via SQLAlchemy)
-├── templates/
-│   └── index.html        # Single-page dark-theme UI
-├── static/
-│   ├── css/style.css
-│   └── js/               # Modular JS (utils, models, instances, etc.)
-├── tests/
-│   └── integration/
-│       └── test_auth.sh  # Auth integration test script
-└── models/               # Mount your model files here
-```
-
 ## Authentication
 
 LlamaMan has a built-in auth system with two layers:
