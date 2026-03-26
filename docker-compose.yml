@@ -27,6 +27,7 @@ services:
       - LLAMAMAN_PROXY_PORT=42069
       - LLAMAMAN_IDLE_TIMEOUT=0
       - HEALTH_CHECK_TIMEOUT=3
+      - MODEL_LOAD_TIMEOUT=300
       # Uncomment to set a fixed Flask session secret (required for multi-replica)
       # - SECRET_KEY=change-me-to-something-random
       # Uncomment to use MariaDB/MySQL instead of JSON file storage
@@ -72,6 +73,7 @@ services:
       - LLAMAMAN_PROXY_PORT=42069
       - LLAMAMAN_IDLE_TIMEOUT=0
       - HEALTH_CHECK_TIMEOUT=3
+      - MODEL_LOAD_TIMEOUT=300
       # - SECRET_KEY=change-me-to-something-random
       # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
     # depends_on:

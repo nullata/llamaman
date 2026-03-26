@@ -15,6 +15,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
+- **Require auth toggle** - enforce bearer token authentication on all endpoints (including model loading) or leave model endpoints open
 - **Persistent state** - instance history and configs survive container restarts
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
 
@@ -117,6 +118,7 @@ services:
 | `SECRET_KEY` | *(auto)* | Flask session secret. Auto-derived from machine-id if unset. |
 | `DATABASE_URL` | *(unset)* | MariaDB/MySQL connection string (e.g. `mysql+pymysql://user:pass@host/db`). Unset = JSON file storage. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks. |
+| `MODEL_LOAD_TIMEOUT` | `300` | Seconds to wait for a model to become healthy during launch/relaunch. Increase for very large models. |
 
 ## First Launch
 

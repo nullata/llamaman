@@ -229,6 +229,7 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 | `SECRET_KEY` | _(auto)_ | Flask session secret. Auto-derived from machine-id if unset. Set this for multi-replica deployments. |
 | `DATABASE_URL` | _(unset)_ | MariaDB/MySQL connection string. Unset = use JSON files. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks |
+| `MODEL_LOAD_TIMEOUT` | `300` | Seconds to wait for a model to become healthy during launch/relaunch. Increase for very large models. |
 
 ## REST API
 
