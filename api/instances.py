@@ -73,10 +73,28 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
             return inst is not None and inst["status"] in ("healthy", "starting")
 
         prior_status = inst["status"]
-        config = inst["config"]
+        config = dict(inst["config"])
         model_path = inst["model_path"]
         internal_port = inst.get("_internal_port", inst["port"])
-        gpu_devices = config.get("gpu_devices")
+
+    # Reload current preset settings so changes made while the model was
+    # inactive are picked up on relaunch.
+    from storage import get_storage
+    preset = get_storage().get_preset(model_path) or {}
+    if preset:
+        for key in ("n_gpu_layers", "ctx_size", "threads", "parallel",
+                     "extra_args", "gpu_devices", "idle_timeout_min",
+                     "max_concurrent", "max_queue_depth", "share_queue",
+                     "embedding_model"):
+            if key in preset:
+                config[key] = preset[key]
+        # Persist the updated config back to the instance record
+        with instances_lock:
+            inst = instances.get(inst_id)
+            if inst:
+                inst["config"] = config
+
+    gpu_devices = config.get("gpu_devices")
 
     refresh_gate(inst_id)
 

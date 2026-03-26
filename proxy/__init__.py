@@ -225,6 +225,13 @@ def make_proxy_app(inst_id: str, internal_port: int):
                 start_response("503 Service Unavailable",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "failed to wake model"}).encode()]
+        elif status == "starting":
+            from api.instances import wait_for_healthy
+            from config import MODEL_LOAD_TIMEOUT
+            if not wait_for_healthy(internal_port, timeout=MODEL_LOAD_TIMEOUT):
+                start_response("503 Service Unavailable",
+                               [("Content-Type", "application/json")])
+                return [json.dumps({"error": "model is loading but did not become healthy in time"}).encode()]
 
         gate = get_gate(inst_id) if _is_inference_request(environ) else None
         if gate:
@@ -241,19 +248,30 @@ def make_proxy_app(inst_id: str, internal_port: int):
 
             headers = {k: v for k, v in req.headers if k.lower() != "host"}
 
-            try:
-                resp = requests.request(
-                    method=req.method,
-                    url=target,
-                    headers=headers,
-                    data=req.get_data(),
-                    stream=True,
-                    timeout=300,
-                )
-            except Exception as e:
+            req_data = req.get_data()
+            last_err = None
+            resp = None
+            for _attempt in range(3):
+                try:
+                    resp = requests.request(
+                        method=req.method,
+                        url=target,
+                        headers=headers,
+                        data=req_data,
+                        stream=True,
+                        timeout=300,
+                    )
+                    break
+                except (requests.ConnectionError, ConnectionRefusedError) as e:
+                    last_err = e
+                    time.sleep(2)
+                except Exception as e:
+                    last_err = e
+                    break
+            if resp is None:
                 start_response("502 Bad Gateway",
                                [("Content-Type", "application/json")])
-                return [json.dumps({"error": str(e)}).encode()]
+                return [json.dumps({"error": str(last_err)}).encode()]
 
             resp_headers = [
                 (k, v) for k, v in resp.headers.items()

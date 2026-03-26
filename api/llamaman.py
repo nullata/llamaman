@@ -112,7 +112,25 @@ def _evict_llamaman_instances_if_needed():
         freed += 1
 
 
+def _wait_for_model_ready(port: int, timeout: float) -> bool:
+    """Poll the llama-server /health endpoint until it reports ready.
+
+    Unlike wait_for_healthy (which is used during launch bookkeeping), this
+    is designed for the request-forwarding path: it retries with a short
+    interval so the first inference request is sent as soon as the model is
+    actually ready.
+    """
+    from api.instances import wait_for_healthy
+    return wait_for_healthy(port, timeout=timeout)
+
+
 def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
+    """Ensure a model instance exists and is at least launched.
+
+    Returns the instance as soon as it is launched (status may still be
+    ``"starting"``).  Callers are expected to use ``_wait_for_model_ready``
+    on the server port before forwarding the actual request.
+    """
     from api.instances import (
         launch_instance, relaunch_inactive_instance, wait_for_healthy,
     )
@@ -134,23 +152,16 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
     with _llamaman_lock:
         # Re-check after acquiring lock (another thread may have launched it)
         inst = _find_running_instance_for_model(model["path"])
-        if inst and inst["status"] == "healthy":
+        if inst and inst["status"] in ("healthy", "starting"):
             with instances_lock:
                 if inst["id"] in instances:
                     instances[inst["id"]]["_last_request_at"] = time.time()
             return inst, None
-        if inst and inst["status"] == "starting":
-            port = inst.get("_internal_port") or inst["port"]
-            if wait_for_healthy(port, timeout=MODEL_LOAD_TIMEOUT):
-                with instances_lock:
-                    if inst["id"] in instances:
-                        instances[inst["id"]]["_last_request_at"] = time.time()
-                        instances[inst["id"]]["status"] = "healthy"
-                return inst, None
-            return None, "model is starting but did not become healthy in time"
 
         existing = inst or _find_any_instance_for_model(model["path"])
         if existing and existing["status"] in ("sleeping", "stopped"):
+            # relaunch_inactive_instance blocks until healthy; if it
+            # succeeds the instance is ready for requests immediately.
             if relaunch_inactive_instance(existing["id"]):
                 return existing, None
             return None, "failed to wake model"
@@ -172,6 +183,7 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
             parallel=preset.get("parallel"),
             extra_args=preset.get("extra_args", ""),
             gpu_devices=preset.get("gpu_devices") or None,
+            idle_timeout_min=preset.get("idle_timeout_min", 0),
             max_concurrent=preset.get("max_concurrent", 0),
             max_queue_depth=preset.get("max_queue_depth", 200),
             share_queue=preset.get("share_queue", False),
@@ -187,17 +199,8 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
 
         logger.info("llamaman: auto-launched %s on port %d", model_name, port)
 
-        if not wait_for_healthy(port, timeout=MODEL_LOAD_TIMEOUT):
-            return inst, "model launched but did not become healthy in time"
-
-        with instances_lock:
-            if inst["id"] in instances:
-                instances[inst["id"]]["status"] = "healthy"
-                started = instances[inst["id"]].get("started_at", 0)
-                if started:
-                    stats = instances[inst["id"]].setdefault("stats", {})
-                    stats["model_load_time_s"] = round(time.time() - started, 1)
-
+    # Return immediately - the model is launched but may still be loading.
+    # The caller will poll for readiness before forwarding the request.
     return inst, None
 
 
@@ -301,12 +304,22 @@ def _stream_llamaman(port: int, openai_body: dict, model_name: str,
 
     resp = None
     try:
-        resp = http_requests.post(
-            f"http://localhost:{port}/v1/chat/completions",
-            json=openai_body,
-            stream=True,
-            timeout=300,
-        )
+        # Retry on connection errors (model may have just finished loading)
+        last_err = None
+        for _attempt in range(3):
+            try:
+                resp = http_requests.post(
+                    f"http://localhost:{port}/v1/chat/completions",
+                    json=openai_body,
+                    stream=True,
+                    timeout=300,
+                )
+                break
+            except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+                last_err = e
+                time.sleep(2)
+        if resp is None:
+            raise last_err or ConnectionError("failed to connect to model server")
         if resp.status_code >= 400:
             error_text = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
             error_obj = {
@@ -382,11 +395,22 @@ def _proxy_non_streaming(port: int, openai_body: dict, model_name: str,
                          mode: str = "chat", inst_id: str | None = None):
     t_start = time.monotonic()
     openai_body["stream"] = False
-    resp = http_requests.post(
-        f"http://localhost:{port}/v1/chat/completions",
-        json=openai_body,
-        timeout=300,
-    )
+    # Retry on connection errors (model may have just finished loading)
+    last_err = None
+    resp = None
+    for _attempt in range(3):
+        try:
+            resp = http_requests.post(
+                f"http://localhost:{port}/v1/chat/completions",
+                json=openai_body,
+                timeout=300,
+            )
+            break
+        except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+            last_err = e
+            time.sleep(2)
+    if resp is None:
+        raise last_err or ConnectionError("failed to connect to model server")
     resp.raise_for_status()
     elapsed_ns = int((time.monotonic() - t_start) * 1e9)
     data = resp.json()
@@ -443,6 +467,20 @@ def _handle_request(mode: str = "chat"):
         return jsonify({"error": err}), 500
 
     server_port = inst.get("_internal_port") or inst["port"]
+
+    # If the model was just launched it may still be loading.  Wait for it
+    # to become healthy before forwarding the request so the prompt is not
+    # lost to a connection-refused error.
+    if inst.get("status") != "healthy":
+        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+            return jsonify({"error": "model launched but did not become healthy in time"}), 500
+        with instances_lock:
+            if inst["id"] in instances:
+                instances[inst["id"]]["status"] = "healthy"
+                started = instances[inst["id"]].get("started_at", 0)
+                if started:
+                    stats = instances[inst["id"]].setdefault("stats", {})
+                    stats["model_load_time_s"] = round(time.time() - started, 1)
 
     gate = get_gate(inst["id"])
     if gate:
@@ -586,6 +624,18 @@ def llamaman_v1_chat():
     server_port = inst.get("_internal_port") or inst["port"]
     inst_id = inst["id"]
 
+    # Wait for the model to finish loading before forwarding
+    if inst.get("status") != "healthy":
+        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+            return jsonify({"error": {"message": "model launched but did not become healthy in time"}}), 500
+        with instances_lock:
+            if inst_id in instances:
+                instances[inst_id]["status"] = "healthy"
+                started = instances[inst_id].get("started_at", 0)
+                if started:
+                    stats = instances[inst_id].setdefault("stats", {})
+                    stats["model_load_time_s"] = round(time.time() - started, 1)
+
     gate = get_gate(inst_id)
     if gate:
         if not gate.acquire(timeout=300):
@@ -595,12 +645,23 @@ def llamaman_v1_chat():
     stream_returned = False
     t_start = time.monotonic()
     try:
-        resp = http_requests.post(
-            f"http://localhost:{server_port}/v1/chat/completions",
-            json=body,
-            stream=stream,
-            timeout=300,
-        )
+        # Retry on connection errors (transient failures right after load)
+        last_err = None
+        resp = None
+        for _attempt in range(3):
+            try:
+                resp = http_requests.post(
+                    f"http://localhost:{server_port}/v1/chat/completions",
+                    json=body,
+                    stream=stream,
+                    timeout=300,
+                )
+                break
+            except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+                last_err = e
+                time.sleep(2)
+        if resp is None:
+            raise last_err or ConnectionError("failed to connect to model server")
         if stream:
             def _relay():
                 try:
