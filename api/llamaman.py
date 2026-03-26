@@ -10,7 +10,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
 
-from config import MODELS_DIR, LLAMAMAN_MAX_MODELS, VERSION, logger
+from config import MODELS_DIR, LLAMAMAN_MAX_MODELS, MODEL_LOAD_TIMEOUT, VERSION, logger
 from core.helpers import find_available_port
 from api.models import detect_quant, discover_models
 from storage import get_storage
@@ -141,7 +141,7 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
             return inst, None
         if inst and inst["status"] == "starting":
             port = inst.get("_internal_port") or inst["port"]
-            if wait_for_healthy(port):
+            if wait_for_healthy(port, timeout=MODEL_LOAD_TIMEOUT):
                 with instances_lock:
                     if inst["id"] in instances:
                         instances[inst["id"]]["_last_request_at"] = time.time()
@@ -187,7 +187,7 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
 
         logger.info("llamaman: auto-launched %s on port %d", model_name, port)
 
-        if not wait_for_healthy(port):
+        if not wait_for_healthy(port, timeout=MODEL_LOAD_TIMEOUT):
             return inst, "model launched but did not become healthy in time"
 
         with instances_lock:

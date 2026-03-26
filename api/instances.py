@@ -14,6 +14,7 @@ from config import (
     INTERNAL_PORT_RANGE_END,
     INTERNAL_PORT_RANGE_START,
     LOGS_DIR,
+    MODEL_LOAD_TIMEOUT,
     PORT_RANGE_END,
     PORT_RANGE_START,
     logger,
@@ -126,7 +127,7 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
 
     save_state()
 
-    if not wait_for_healthy(internal_port):
+    if not wait_for_healthy(internal_port, timeout=MODEL_LOAD_TIMEOUT):
         logger.warning("Relaunched %s but it did not become healthy", inst_id)
         return False
 
