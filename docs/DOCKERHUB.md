@@ -24,6 +24,8 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - `cuda-latest`, `cuda-<version>` - NVIDIA GPU (CUDA) support
 - `rocm-latest`, `rocm-<version>` - AMD GPU (ROCm) support *(experimental, not tested)*
 
+⚠️ **Dev note:** I do not own an AMD GPU and I am unable to test the ROCm functionality. I encourage users who can test the ROCm images to leave some feedback on the GitHub page for the project. For that matter, **ALL user feedback is welcome.**
+
 ## Quick Start
 
 ### NVIDIA (CUDA)
