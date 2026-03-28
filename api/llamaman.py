@@ -10,7 +10,7 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
 
-from config import MODELS_DIR, LLAMAMAN_MAX_MODELS, MODEL_LOAD_TIMEOUT, VERSION, logger
+from config import MODELS_DIR, LLAMAMAN_MAX_MODELS, MODEL_LOAD_TIMEOUT, REQUEST_TIMEOUT, VERSION, logger
 from core.helpers import find_available_port
 from api.models import detect_quant, discover_models
 from storage import get_storage
@@ -312,10 +312,11 @@ def _stream_llamaman(port: int, openai_body: dict, model_name: str,
                     f"http://localhost:{port}/v1/chat/completions",
                     json=openai_body,
                     stream=True,
-                    timeout=300,
+                    timeout=REQUEST_TIMEOUT,
                 )
                 break
-            except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+            except (http_requests.ConnectionError, http_requests.Timeout,
+                    ConnectionRefusedError) as e:
                 last_err = e
                 time.sleep(2)
         if resp is None:
@@ -403,10 +404,11 @@ def _proxy_non_streaming(port: int, openai_body: dict, model_name: str,
             resp = http_requests.post(
                 f"http://localhost:{port}/v1/chat/completions",
                 json=openai_body,
-                timeout=300,
+                timeout=REQUEST_TIMEOUT,
             )
             break
-        except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+        except (http_requests.ConnectionError, http_requests.Timeout,
+                ConnectionRefusedError) as e:
             last_err = e
             time.sleep(2)
     if resp is None:
@@ -484,7 +486,7 @@ def _handle_request(mode: str = "chat"):
 
     gate = get_gate(inst["id"])
     if gate:
-        if not gate.acquire(timeout=300):
+        if not gate.acquire(timeout=REQUEST_TIMEOUT):
             return jsonify({"error": "request queue full"}), 429
 
     openai_body = _translate_to_openai(body)
@@ -638,7 +640,7 @@ def llamaman_v1_chat():
 
     gate = get_gate(inst_id)
     if gate:
-        if not gate.acquire(timeout=300):
+        if not gate.acquire(timeout=REQUEST_TIMEOUT):
             return jsonify({"error": {"message": "request queue full"}}), 429
 
     stream = body.get("stream", False)
@@ -654,10 +656,11 @@ def llamaman_v1_chat():
                     f"http://localhost:{server_port}/v1/chat/completions",
                     json=body,
                     stream=stream,
-                    timeout=300,
+                    timeout=REQUEST_TIMEOUT,
                 )
                 break
-            except (http_requests.ConnectionError, ConnectionRefusedError) as e:
+            except (http_requests.ConnectionError, http_requests.Timeout,
+                    ConnectionRefusedError) as e:
                 last_err = e
                 time.sleep(2)
         if resp is None:

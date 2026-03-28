@@ -121,6 +121,7 @@ services:
 | `DATABASE_URL` | *(unset)* | MariaDB/MySQL connection string (e.g. `mysql+pymysql://user:pass@host/db`). Unset = JSON file storage. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks. |
 | `MODEL_LOAD_TIMEOUT` | `300` | Seconds to wait for a model to become healthy during launch/relaunch. Increase for very large models. |
+| `REQUEST_TIMEOUT` | `300` | Timeout in seconds for upstream requests to llama-server and gate acquire waits. Increase if requests are being cut off under heavy concurrency. |
 
 ## First Launch
 

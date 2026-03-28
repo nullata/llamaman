@@ -8,7 +8,7 @@ import requests
 from werkzeug.serving import make_server
 from werkzeug.wrappers import Request as WerkzeugRequest
 
-from config import logger
+from config import REQUEST_TIMEOUT, logger
 from core.state import instances, instances_lock
 
 
@@ -48,9 +48,9 @@ class RequestGate:
             if self._waiting >= self.max_queue_depth:
                 return False
             self._waiting += 1
-            self.queued = self._waiting
             try:
                 while not self._closed and self.active >= self.max_concurrent:
+                    self.queued = self._waiting
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         return False
@@ -235,7 +235,7 @@ def make_proxy_app(inst_id: str, internal_port: int):
 
         gate = get_gate(inst_id) if _is_inference_request(environ) else None
         if gate:
-            if not gate.acquire(timeout=300):
+            if not gate.acquire(timeout=REQUEST_TIMEOUT):
                 start_response("429 Too Many Requests",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "request queue full"}).encode()]
@@ -259,16 +259,20 @@ def make_proxy_app(inst_id: str, internal_port: int):
                         headers=headers,
                         data=req_data,
                         stream=True,
-                        timeout=300,
+                        timeout=REQUEST_TIMEOUT,
                     )
                     break
-                except (requests.ConnectionError, ConnectionRefusedError) as e:
+                except (requests.ConnectionError, requests.Timeout,
+                        ConnectionRefusedError) as e:
                     last_err = e
                     time.sleep(2)
                 except Exception as e:
                     last_err = e
                     break
             if resp is None:
+                if gate:
+                    gate.release()
+                    gate = None  # prevent double-release in except block
                 start_response("502 Bad Gateway",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": str(last_err)}).encode()]
