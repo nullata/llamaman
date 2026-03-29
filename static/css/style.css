@@ -789,6 +789,11 @@ select option {
   color: var(--green);
 }
 
+.dl-status-paused {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
 .dl-status-failed {
   background: rgba(244, 63, 94, 0.15);
   color: var(--red);

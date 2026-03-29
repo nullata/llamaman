@@ -101,6 +101,8 @@
               Settings</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-downloads"
               aria-controls="settings-tab-downloads" aria-selected="false" tabindex="-1" data-tab="downloads">Downloads</button>
+            <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-huggingface"
+              aria-controls="settings-tab-huggingface" aria-selected="false" tabindex="-1" data-tab="huggingface">Hugging Face</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-apikeys"
               aria-controls="settings-tab-apikeys" aria-selected="false" tabindex="-1" data-tab="apikeys">API
               Keys</button>
@@ -236,6 +238,18 @@
             </div>
           </div>
 
+          <div class="tab-panel" id="settings-tab-huggingface" role="tabpanel"
+            aria-labelledby="settings-tab-btn-huggingface" data-tab-panel="huggingface" hidden>
+            <p class="hint-text">Save Hugging Face access tokens here, then pick one when starting a download for gated or private repos.</p>
+            <div class="form-actions form-actions-compact" style="margin-bottom:14px;">
+              <input id="hf-token-name" type="text" placeholder="Token name (e.g. Personal)" class="input-narrow" />
+              <input id="hf-token-value" type="password" placeholder="hf_..." autocomplete="new-password" class="input-narrow" />
+              <button class="btn btn-primary" type="button" id="btn-save-hf-token"><i class="fa-solid fa-plus"></i>
+                Save Token</button>
+            </div>
+            <div id="hf-tokens-list"></div>
+          </div>
+
           <div class="tab-panel" id="settings-tab-apikeys" role="tabpanel"
             aria-labelledby="settings-tab-btn-apikeys" data-tab-panel="apikeys" hidden>
             <div class="cleanup-settings-grid" style="margin-bottom:14px;">
@@ -295,8 +309,11 @@
               <input id="d-filename" type="text" placeholder="model.gguf  (leave blank for full repo)" />
             </div>
             <div class="form-group">
-              <label for="d-token">HuggingFace Token (optional - for private repos)</label>
-              <input id="d-token" type="password" placeholder="hf_..." autocomplete="new-password" />
+              <label for="d-token-id">Saved HuggingFace Token (optional)</label>
+              <select id="d-token-id">
+                <option value="">No token</option>
+              </select>
+              <p id="d-token-hint" class="hint-text">Use the Hugging Face tab in Settings to save tokens for gated or private repos.</p>
             </div>
             <div class="form-group">
               <label for="d-speed-limit">Speed Limit Mbps (0 = unlimited)</label>
