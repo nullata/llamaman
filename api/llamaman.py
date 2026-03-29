@@ -159,14 +159,18 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
             return inst, None
 
         existing = inst or _find_any_instance_for_model(model["path"])
+
+        # Always evict before launching or relaunching so we stay within
+        # LLAMAMAN_MAX_MODELS.  Sleeping/stopped instances that get evicted
+        # (sleeping → stopped) are still valid relaunch targets.
+        _evict_llamaman_instances_if_needed()
+
         if existing and existing["status"] in ("sleeping", "stopped"):
             # relaunch_inactive_instance blocks until healthy; if it
             # succeeds the instance is ready for requests immediately.
             if relaunch_inactive_instance(existing["id"]):
                 return existing, None
             return None, "failed to wake model"
-
-        _evict_llamaman_instances_if_needed()
 
         preset = get_storage().get_preset(model["path"]) or {}
 
