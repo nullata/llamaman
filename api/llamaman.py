@@ -1,6 +1,7 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
 import json
+import os
 import threading
 import time
 import uuid
@@ -10,8 +11,21 @@ from pathlib import Path
 import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
 
-from config import MODELS_DIR, LLAMAMAN_MAX_MODELS, MODEL_LOAD_TIMEOUT, REQUEST_TIMEOUT, VERSION, logger
-from core.helpers import find_available_port
+from config import (
+    HEALTH_CHECK_TIMEOUT,
+    MODELS_DIR,
+    LLAMAMAN_MAX_MODELS,
+    MODEL_LOAD_TIMEOUT,
+    REQUEST_TIMEOUT,
+    VERSION,
+    logger,
+)
+from core.helpers import (
+    find_available_port,
+    is_llama_pid,
+    is_pid_alive,
+    scan_llama_server_processes,
+)
 from api.models import detect_quant, discover_models
 from storage import get_storage
 from core.state import instances, instances_lock, update_instance_stats
@@ -229,6 +243,111 @@ def _llamaman_model_entry(m: dict) -> dict:
             "quantization_level": m.get("quant", ""),
         },
     }
+
+
+def _instance_process_alive(inst: dict) -> bool:
+    proc = inst.get("_process")
+    if proc is not None:
+        return proc.poll() is None
+
+    pid = inst.get("pid", 0)
+    return pid > 0 and is_pid_alive(pid) and is_llama_pid(pid)
+
+
+def _probe_server_ready(port: int) -> bool:
+    try:
+        resp = http_requests.get(
+            f"http://localhost:{port}/health",
+            timeout=HEALTH_CHECK_TIMEOUT,
+        )
+        return resp.json().get("status") == "ok"
+    except Exception:
+        return False
+
+
+def _llamaman_ps_entry(model_path: str, model_meta: dict | None = None,
+                       started_at: float | None = None) -> dict:
+    model_meta = model_meta or {}
+    model_name = _model_name_from_path(model_path)
+    size_bytes = model_meta.get("size_bytes")
+    if size_bytes is None:
+        try:
+            size_bytes = os.path.getsize(model_path)
+        except OSError:
+            size_bytes = 0
+
+    return {
+        "name": model_name,
+        "model": model_name,
+        "size": size_bytes,
+        "digest": f"sha256:{uuid.uuid5(uuid.NAMESPACE_URL, model_path).hex}",
+        "details": {
+            "parent_model": "",
+            "format": model_meta.get("type", "gguf"),
+            "family": model_name.split("-")[0] if "-" in model_name else model_name,
+            "families": [model_name.split("-")[0]] if "-" in model_name else [model_name],
+            "parameter_size": "",
+            "quantization_level": model_meta.get("quant", detect_quant(Path(model_path).stem)),
+        },
+        "expires_at": datetime.fromtimestamp(
+            (started_at or time.time()) + 300,
+            tz=timezone.utc,
+        ).isoformat(),
+        "size_vram": 0,
+    }
+
+
+def _list_loaded_models() -> list[dict]:
+    model_index = {
+        os.path.realpath(m["path"]): m
+        for m in discover_models(MODELS_DIR)
+    }
+    live_by_path: dict[str, dict] = {}
+
+    with instances_lock:
+        tracked_instances = [dict(inst) for inst in instances.values()]
+
+    for inst in tracked_instances:
+        if not _instance_process_alive(inst):
+            continue
+
+        model_path = inst["model_path"]
+        server_port = inst.get("_internal_port") or inst["port"]
+        ready = _probe_server_ready(server_port)
+        key = os.path.realpath(model_path)
+        existing = live_by_path.get(key)
+
+        if existing and existing.get("ready") and not ready:
+            continue
+
+        live_by_path[key] = {
+            "model_path": model_path,
+            "started_at": inst.get("started_at"),
+            "ready": ready,
+        }
+
+    for info in scan_llama_server_processes():
+        model_path = info["model_path"]
+        key = os.path.realpath(model_path)
+        if key in live_by_path and live_by_path[key].get("ready"):
+            continue
+
+        live_by_path[key] = {
+            "model_path": model_path,
+            "started_at": None,
+            "ready": _probe_server_ready(info["port"]),
+        }
+
+    loaded = [
+        _llamaman_ps_entry(
+            entry["model_path"],
+            model_meta=model_index.get(os.path.realpath(entry["model_path"])),
+            started_at=entry.get("started_at"),
+        )
+        for entry in live_by_path.values()
+    ]
+    loaded.sort(key=lambda item: item["name"])
+    return loaded
 
 
 # ---------------------------------------------------------------------------
@@ -563,30 +682,7 @@ def llamaman_show():
 
 @bp.route("/api/ps", methods=["GET"])
 def llamaman_ps():
-    running = []
-    with instances_lock:
-        for inst in instances.values():
-            if inst["status"] in ("stopped",):
-                continue
-            running.append({
-                "name": _model_name_from_path(inst["model_path"]),
-                "model": _model_name_from_path(inst["model_path"]),
-                "size": 0,
-                "digest": "",
-                "details": {
-                    "parent_model": "",
-                    "format": "gguf",
-                    "family": "",
-                    "families": [],
-                    "parameter_size": "",
-                    "quantization_level": detect_quant(Path(inst["model_path"]).stem),
-                },
-                "expires_at": datetime.fromtimestamp(
-                    inst["started_at"] + 300, tz=timezone.utc
-                ).isoformat(),
-                "size_vram": 0,
-            })
-    return jsonify({"models": running})
+    return jsonify({"models": _list_loaded_models()})
 
 
 @bp.route("/api/chat", methods=["POST"])
