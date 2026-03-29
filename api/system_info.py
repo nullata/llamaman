@@ -17,6 +17,21 @@ def _read_cgroup_value(path: str) -> int | None:
         return None
 
 
+def _read_cgroup_stats(path: str) -> dict[str, int] | None:
+    try:
+        stats = {}
+        with open(path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) != 2:
+                    continue
+                key, value = parts
+                stats[key] = int(value)
+        return stats
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
 def _get_container_cpu_limit() -> float | None:
     try:
         with open("/sys/fs/cgroup/cpu.max") as f:
@@ -56,6 +71,21 @@ def _get_container_memory_usage() -> int | None:
     return _read_cgroup_value("/sys/fs/cgroup/memory/memory.usage_in_bytes")
 
 
+def _get_container_inactive_file_bytes() -> int:
+    stats = _read_cgroup_stats("/sys/fs/cgroup/memory.stat")
+    if stats:
+        return max(
+            stats.get("inactive_file", stats.get("total_inactive_file", 0)),
+            0,
+        )
+
+    legacy_stats = _read_cgroup_stats("/sys/fs/cgroup/memory/memory.stat")
+    if legacy_stats:
+        return max(legacy_stats.get("total_inactive_file", 0), 0)
+
+    return 0
+
+
 @bp.route("/api/system-info")
 def api_system_info():
     try:
@@ -67,10 +97,15 @@ def api_system_info():
         mem_usage = _get_container_memory_usage()
 
         if mem_limit and mem_usage is not None:
+            # cgroup usage includes page cache for recently-read GGUF files,
+            # which can stay charged after a model exits. Subtract inactive
+            # file cache so the UI tracks the active working set instead.
+            inactive_file = min(_get_container_inactive_file_bytes(), mem_usage)
+            working_set = max(mem_usage - inactive_file, 0)
             ram_total_mb = round(mem_limit / (1024 * 1024))
-            ram_used_mb = round(mem_usage / (1024 * 1024))
+            ram_used_mb = round(working_set / (1024 * 1024))
             ram_free_mb = ram_total_mb - ram_used_mb
-            ram_percent = round(mem_usage / mem_limit * 100, 1) if mem_limit > 0 else 0
+            ram_percent = round(working_set / mem_limit * 100, 1) if mem_limit > 0 else 0
         else:
             vm = psutil.virtual_memory()
             ram_total_mb = round(vm.total / (1024 * 1024))
