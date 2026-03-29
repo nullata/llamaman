@@ -128,6 +128,8 @@ async function loadSettings() {
 
     const speedLimit = document.getElementById('s-global-speed-limit');
     if (speedLimit) speedLimit.value = s.global_speed_limit_mbps ?? 0;
+
+    await loadHuggingFaceTokens();
   } catch (e) {}
 }
 
@@ -222,6 +224,127 @@ if (requireAuthToggle) {
 
 const saveSettingsBtn = document.getElementById('btn-save-settings');
 if (saveSettingsBtn) saveSettingsBtn.addEventListener('click', saveSettings);
+
+// -------------------------------------------------------------------------
+// Hugging Face Tokens
+// -------------------------------------------------------------------------
+function populateDownloadTokenOptions() {
+  const select = document.getElementById('d-token-id');
+  const hint = document.getElementById('d-token-hint');
+  if (!select) return;
+
+  const selected = select.value;
+  select.innerHTML = '<option value="">No token</option>';
+  huggingFaceTokens.forEach(token => {
+    const option = document.createElement('option');
+    option.value = token.id;
+    option.textContent = `${token.name} (${token.preview})`;
+    select.appendChild(option);
+  });
+
+  if (huggingFaceTokens.some(token => token.id === selected)) {
+    select.value = selected;
+  }
+
+  if (hint) {
+    hint.textContent = huggingFaceTokens.length > 0
+      ? 'Pick a saved token for gated or private repos, or leave this on "No token".'
+      : 'Use the Hugging Face tab in Settings to save tokens for gated or private repos.';
+  }
+}
+
+async function loadHuggingFaceTokens() {
+  const list = document.getElementById('hf-tokens-list');
+  try {
+    const res = await apiFetch('/api/settings/huggingface-tokens');
+    if (!res) return;
+    huggingFaceTokens = await res.json();
+  } catch (e) {
+    huggingFaceTokens = [];
+  }
+
+  populateDownloadTokenOptions();
+  if (!list) return;
+
+  if (huggingFaceTokens.length === 0) {
+    list.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px;">No Hugging Face tokens saved.</div>';
+    return;
+  }
+
+  list.innerHTML = '';
+  huggingFaceTokens.forEach(token => {
+    const created = token.created_at
+      ? new Date(token.created_at * 1000).toLocaleDateString()
+      : '';
+    const item = document.createElement('div');
+    item.className = 'dl-item';
+    item.innerHTML = `
+      <div class="dl-item-top">
+        <span class="dl-item-name"><strong>${escHtml(token.name)}</strong></span>
+        <code style="font-size:11px;color:var(--muted);">${escHtml(token.preview)}</code>
+        <span style="font-size:11px;color:var(--muted);">${escHtml(created)}</span>
+        <button class="btn-xs danger btn-hf-token-delete" data-id="${token.id}"><i class="fa-solid fa-trash"></i> Delete</button>
+      </div>
+    `;
+    list.appendChild(item);
+  });
+
+  list.querySelectorAll('.btn-hf-token-delete').forEach(btn => {
+    btn.addEventListener('click', () => deleteHuggingFaceToken(btn.dataset.id));
+  });
+}
+
+async function createHuggingFaceToken() {
+  const nameInput = document.getElementById('hf-token-name');
+  const valueInput = document.getElementById('hf-token-value');
+  if (!nameInput || !valueInput) return;
+
+  const name = nameInput.value.trim() || 'Untitled';
+  const token = valueInput.value.trim();
+  if (!token) {
+    toast('Token value is required', 'error');
+    return;
+  }
+
+  try {
+    const res = await apiFetch('/api/settings/huggingface-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, token }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast('Hugging Face token saved', 'success');
+      nameInput.value = '';
+      valueInput.value = '';
+      await loadHuggingFaceTokens();
+    } else {
+      toast(`Failed: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    toast('Error saving token: ' + e.message, 'error');
+  }
+}
+
+async function deleteHuggingFaceToken(id) {
+  const ok = await showConfirm('Delete Hugging Face Token', 'Delete this saved Hugging Face token?');
+  if (!ok) return;
+  try {
+    const res = await apiFetch(`/api/settings/huggingface-tokens/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      toast('Hugging Face token deleted', 'info');
+      await loadHuggingFaceTokens();
+    } else {
+      const data = await res.json();
+      toast(`Failed: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    toast('Error deleting token: ' + e.message, 'error');
+  }
+}
+
+const btnSaveHfToken = document.getElementById('btn-save-hf-token');
+if (btnSaveHfToken) btnSaveHfToken.addEventListener('click', createHuggingFaceToken);
 
 // -------------------------------------------------------------------------
 // API Keys

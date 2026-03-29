@@ -205,7 +205,7 @@ def _background_poller():
         for dl_id in dl_ids:
             with downloads_lock:
                 dl = downloads.get(dl_id)
-                if dl is None or dl["status"] in ("completed", "failed", "cancelled"):
+                if dl is None or dl["status"] in ("completed", "failed", "cancelled", "paused"):
                     continue
                 proc = dl.get("_process")
 

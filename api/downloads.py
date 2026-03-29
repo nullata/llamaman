@@ -10,12 +10,43 @@ from pathlib import Path
 
 from flask import Blueprint, Response, jsonify, request
 
+from api.settings import get_hf_token_secret
 from config import DATA_DIR, LOGS_DIR, MODELS_DIR, logger
 from core.helpers import cleanup_download_dir, kill_instance_process, public_dict, read_log_file, stream_log_file
 from core.state import downloads, downloads_lock, save_state
 from storage import get_storage
 
 bp = Blueprint("downloads", __name__)
+
+
+def _build_download_env(repo_id: str, dest_path: str, filename: str, token: str, per_model_mbps: float) -> dict:
+    global_mbps = float(get_storage().get_settings().get("global_speed_limit_mbps", 0) or 0)
+    effective_mbps = global_mbps if global_mbps > 0 else per_model_mbps
+    return {
+        **os.environ,
+        "HF_REPO_ID": repo_id,
+        "HF_LOCAL_DIR": dest_path,
+        "HF_FILENAME": filename,
+        "HF_TOKEN": token,
+        "HF_SPEED_LIMIT": str(int(effective_mbps * 1_000_000 / 8)) if effective_mbps else "0",
+        "HF_PER_MODEL_SPEED_LIMIT": str(int(per_model_mbps * 1_000_000 / 8)) if per_model_mbps else "0",
+        "DATA_DIR": DATA_DIR,
+        "PYTHONUNBUFFERED": "1",
+    }
+
+
+def _spawn_download_process(dl_id: str, repo_id: str, dest_path: str, filename: str,
+                            token: str, per_model_mbps: float, log_mode: str = "w"):
+    log_file = os.path.join(LOGS_DIR, f"dl-{dl_id}.log")
+    log_fh = open(log_file, log_mode, buffering=1)
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "core.downloader"],
+        env=_build_download_env(repo_id, dest_path, filename, token, per_model_mbps),
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        close_fds=True,
+    )
+    return proc, log_fh, log_file
 
 
 # ---------------------------------------------------------------------------
@@ -38,11 +69,12 @@ def api_downloads_create():
 
     filename = body.get("filename", "").strip()
     token = body.get("hf_token", "").strip()
+    token_id = body.get("hf_token_id", "").strip()
+    if token_id:
+        token = get_hf_token_secret(token_id)
+        if not token:
+            return jsonify({"error": "Saved Hugging Face token not found"}), 400
     per_model_mbps = float(body.get("speed_limit_mbps", 0) or 0)
-
-    # Compute effective initial limit (global overrides per-model at launch time)
-    global_mbps = float(get_storage().get_settings().get("global_speed_limit_mbps", 0) or 0)
-    effective_mbps = global_mbps if global_mbps > 0 else per_model_mbps
 
     dest_name = repo_id.split("/")[-1]
     if filename:
@@ -51,28 +83,10 @@ def api_downloads_create():
     os.makedirs(dest_path, exist_ok=True)
 
     dl_id = str(uuid.uuid4())
-    log_file = os.path.join(LOGS_DIR, f"dl-{dl_id}.log")
-
-    env = {
-        **os.environ,
-        "HF_REPO_ID": repo_id,
-        "HF_LOCAL_DIR": dest_path,
-        "HF_FILENAME": filename,
-        "HF_TOKEN": token,
-        "HF_SPEED_LIMIT": str(int(effective_mbps * 1_000_000 / 8)) if effective_mbps else "0",
-        "HF_PER_MODEL_SPEED_LIMIT": str(int(per_model_mbps * 1_000_000 / 8)) if per_model_mbps else "0",
-        "DATA_DIR": DATA_DIR,
-        "PYTHONUNBUFFERED": "1",
-    }
 
     try:
-        log_fh = open(log_file, "w", buffering=1)
-        proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "core.downloader"],
-            env=env,
-            stdout=log_fh,
-            stderr=subprocess.STDOUT,
-            close_fds=True,
+        proc, log_fh, log_file = _spawn_download_process(
+            dl_id, repo_id, dest_path, filename, token, per_model_mbps, log_mode="w",
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -86,6 +100,9 @@ def api_downloads_create():
         "pid": proc.pid,
         "log_file": log_file,
         "started_at": time.time(),
+        "_hf_token": token,
+        "_hf_token_id": token_id,
+        "per_model_speed_limit_mbps": per_model_mbps,
         "_process": proc,
         "_log_fh": log_fh,
     }
@@ -107,6 +124,83 @@ def api_downloads_get(dl_id):
         return jsonify(public_dict(dl))
 
 
+@bp.route("/api/downloads/<dl_id>/pause", methods=["POST"])
+def api_downloads_pause(dl_id):
+    exited_dest_path = ""
+    exited_status = ""
+    with downloads_lock:
+        dl = downloads.get(dl_id)
+        if dl is None:
+            return jsonify({"error": "Not found"}), 404
+        if dl["status"] != "downloading":
+            return jsonify({"error": "Only active downloads can be paused"}), 409
+        proc = dl.get("_process")
+        if proc is not None:
+            exit_code = proc.poll()
+            if exit_code is not None:
+                kill_instance_process(dl)
+                dl["status"] = "completed" if exit_code == 0 else "failed"
+                dl["pid"] = 0
+                exited_status = dl["status"]
+                if exit_code != 0:
+                    exited_dest_path = dl.get("dest_path", "")
+            else:
+                kill_instance_process(dl)
+                dl["status"] = "paused"
+                dl["pid"] = 0
+        else:
+            dl["status"] = "paused"
+            dl["pid"] = 0
+
+    save_state()
+    if exited_dest_path:
+        cleanup_download_dir(exited_dest_path)
+        logger.info("Download %s failed while pausing - cleaned up %s", dl_id, exited_dest_path)
+    if exited_status:
+        return jsonify({"error": f"Download already {exited_status}"}), 409
+    logger.info("Download paused: %s", dl_id)
+    return jsonify({"status": "paused"})
+
+
+@bp.route("/api/downloads/<dl_id>/resume", methods=["POST"])
+def api_downloads_resume(dl_id):
+    with downloads_lock:
+        dl = downloads.get(dl_id)
+        if dl is None:
+            return jsonify({"error": "Not found"}), 404
+        if dl["status"] != "paused":
+            return jsonify({"error": "Only paused downloads can be resumed"}), 409
+
+        try:
+            token = dl.get("_hf_token", "")
+            token_id = dl.get("_hf_token_id", "")
+            if not token and token_id:
+                token = get_hf_token_secret(token_id)
+                if not token:
+                    return jsonify({"error": "Saved Hugging Face token is no longer available"}), 409
+            proc, log_fh, log_file = _spawn_download_process(
+                dl_id,
+                dl["repo_id"],
+                dl["dest_path"],
+                dl.get("filename", ""),
+                token,
+                float(dl.get("per_model_speed_limit_mbps", 0) or 0),
+                log_mode="a",
+            )
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+        dl["status"] = "downloading"
+        dl["pid"] = proc.pid
+        dl["log_file"] = log_file
+        dl["_process"] = proc
+        dl["_log_fh"] = log_fh
+
+    save_state()
+    logger.info("Download resumed: %s (pid %d)", dl_id, proc.pid)
+    return jsonify(public_dict(dl))
+
+
 @bp.route("/api/downloads/<dl_id>", methods=["DELETE"])
 def api_downloads_cancel(dl_id):
     with downloads_lock:
@@ -116,6 +210,7 @@ def api_downloads_cancel(dl_id):
         dest_path = dl.get("dest_path", "")
         kill_instance_process(dl)
         dl["status"] = "cancelled"
+        dl["pid"] = 0
 
     if dest_path:
         cleanup_download_dir(dest_path)
@@ -129,8 +224,8 @@ def api_downloads_remove(dl_id):
         dl = downloads.get(dl_id)
         if dl is None:
             return jsonify({"error": "Not found"}), 404
-        if dl["status"] == "downloading":
-            return jsonify({"error": "Cannot remove active download, cancel it first"}), 409
+        if dl["status"] in ("downloading", "paused"):
+            return jsonify({"error": "Cannot remove active or paused download, cancel it first"}), 409
         del downloads[dl_id]
     save_state()
     return jsonify({"status": "removed"})

@@ -5,6 +5,7 @@
 // -------------------------------------------------------------------------
 let instances = {};          // id -> instance obj
 let downloads = {};          // id -> download obj
+let huggingFaceTokens = [];  // saved Hugging Face tokens (safe metadata only)
 let selectedModelPath = null;
 let allModels = [];           // cached model list for filtering
 

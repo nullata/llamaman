@@ -15,6 +15,9 @@ async function refreshDownloadDiskSpace() {
 }
 
 async function openDownloadModal() {
+  if (typeof loadHuggingFaceTokens === 'function') {
+    await loadHuggingFaceTokens();
+  }
   document.getElementById('download-modal').classList.add('open');
   document.getElementById('d-repo-id').focus();
   refreshDownloadDiskSpace();
@@ -47,7 +50,7 @@ if (downloadForm) downloadForm.addEventListener('submit', async (e) => {
   const body = {
     repo_id:  document.getElementById('d-repo-id').value.trim(),
     filename: document.getElementById('d-filename').value.trim(),
-    hf_token: document.getElementById('d-token').value.trim(),
+    hf_token_id: document.getElementById('d-token-id').value.trim(),
     speed_limit_mbps: parseFloat(document.getElementById('d-speed-limit').value) || 0,
   };
 
@@ -89,11 +92,108 @@ async function pollDownloads() {
   try {
     const res = await apiFetch('/api/downloads');
     const list = await res.json();
+    const prevDownloads = downloads;
     const map = {};
-    list.forEach(d => map[d.id] = d);
+    list.forEach(d => {
+      const prev = prevDownloads[d.id];
+      map[d.id] = prev ? { ...d, hasNotified: prev.hasNotified } : d;
+    });
     downloads = map;
     renderDownloads();
   } catch (e) { /* ignore */ }
+}
+
+function createDownloadItem(dl) {
+  const item = document.createElement('div');
+  item.className = 'dl-item';
+  item.dataset.id = dl.id;
+  item.innerHTML = `
+    <div class="dl-item-top">
+      <span class="dl-item-name"></span>
+      <span class="dl-status"></span>
+    </div>
+    <div class="dl-item-actions"></div>
+  `;
+  return item;
+}
+
+function updateDownloadItem(item, dl) {
+  item.dataset.id = dl.id;
+
+  const label = dl.filename ? dl.filename : dl.repo_id.split('/').pop();
+  const top = item.querySelector('.dl-item-top');
+  let spinner = top.querySelector('.spinner');
+  if (dl.status === 'downloading') {
+    if (!spinner) {
+      spinner = document.createElement('span');
+      spinner.className = 'spinner';
+      top.prepend(spinner);
+    }
+  } else if (spinner) {
+    spinner.remove();
+  }
+
+  const name = item.querySelector('.dl-item-name');
+  name.textContent = label;
+  name.title = dl.repo_id;
+
+  const status = item.querySelector('.dl-status');
+  status.textContent = dl.status;
+  status.className = `dl-status dl-status-${dl.status}`;
+
+  const actions = item.querySelector('.dl-item-actions');
+  actions.innerHTML = '';
+
+  const logsBtn = document.createElement('button');
+  logsBtn.className = 'btn-xs btn-dl-logs';
+  logsBtn.dataset.id = dl.id;
+  logsBtn.innerHTML = '<i class="fa-solid fa-terminal"></i> Logs';
+  actions.appendChild(logsBtn);
+
+  if (dl.status === 'downloading') {
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn-xs danger btn-dl-cancel';
+    cancelBtn.dataset.id = dl.id;
+    cancelBtn.innerHTML = '<i class="fa-solid fa-ban"></i> Cancel';
+    actions.appendChild(cancelBtn);
+
+    const pauseBtn = document.createElement('button');
+    pauseBtn.className = 'btn-xs btn-dl-pause';
+    pauseBtn.dataset.id = dl.id;
+    pauseBtn.innerHTML = '<i class="fa-solid fa-pause"></i> Pause';
+    actions.appendChild(pauseBtn);
+  }
+
+  if (dl.status === 'paused') {
+    const resumeBtn = document.createElement('button');
+    resumeBtn.className = 'btn-xs btn-dl-resume';
+    resumeBtn.dataset.id = dl.id;
+    resumeBtn.innerHTML = '<i class="fa-solid fa-play"></i> Resume';
+    actions.appendChild(resumeBtn);
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'btn-xs danger btn-dl-cancel';
+    cancelBtn.dataset.id = dl.id;
+    cancelBtn.innerHTML = '<i class="fa-solid fa-ban"></i> Cancel';
+    actions.appendChild(cancelBtn);
+  }
+
+  if (dl.status === 'completed') {
+    const useBtn = document.createElement('button');
+    useBtn.className = 'btn-xs btn-dl-use';
+    useBtn.dataset.path = dl.dest_path;
+    useBtn.dataset.filename = dl.filename || '';
+    useBtn.innerHTML = '<i class="fa-solid fa-arrow-right"></i> Use';
+    actions.appendChild(useBtn);
+  }
+
+  if (['failed', 'cancelled', 'completed'].includes(dl.status)) {
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn-xs danger btn-dl-remove';
+    removeBtn.dataset.id = dl.id;
+    removeBtn.innerHTML = '<i class="fa-solid fa-trash"></i> Remove';
+    actions.appendChild(removeBtn);
+  }
 }
 
 function renderDownloads() {
@@ -113,37 +213,21 @@ function renderDownloads() {
     return bActive - aActive || b.started_at - a.started_at;
   });
 
-  panel.innerHTML = '';
+  const emptyState = panel.querySelector('#dl-empty');
+  if (emptyState) emptyState.remove();
+
+  const existingItems = new Map(
+    [...panel.querySelectorAll('.dl-item')].map(item => [item.dataset.id, item]),
+  );
+
   all.forEach(dl => {
-    const item = document.createElement('div');
-    item.className = 'dl-item';
-    item.dataset.id = dl.id;
-
-    const label = dl.filename ? dl.filename : dl.repo_id.split('/').pop();
-    const spinner = dl.status === 'downloading'
-      ? '<span class="spinner"></span>' : '';
-
-    item.innerHTML = `
-      <div class="dl-item-top">
-        ${spinner}
-        <span class="dl-item-name" title="${escHtml(dl.repo_id)}">${escHtml(label)}</span>
-        <span class="dl-status dl-status-${dl.status}">${dl.status}</span>
-      </div>
-      <div class="dl-item-actions">
-        <button class="btn-xs btn-dl-logs" data-id="${dl.id}"><i class="fa-solid fa-terminal"></i> Logs</button>
-        ${dl.status === 'downloading'
-          ? `<button class="btn-xs danger btn-dl-cancel" data-id="${dl.id}"><i class="fa-solid fa-ban"></i> Cancel</button>`
-          : ''}
-        ${dl.status === 'completed'
-          ? `<button class="btn-xs btn-dl-use" data-path="${escHtml(dl.dest_path)}" data-filename="${escHtml(dl.filename)}"><i class="fa-solid fa-arrow-right"></i> Use</button>`
-          : ''}
-        ${['failed', 'cancelled', 'completed'].includes(dl.status)
-          ? `<button class="btn-xs danger btn-dl-remove" data-id="${dl.id}"><i class="fa-solid fa-trash"></i> Remove</button>`
-          : ''}
-      </div>
-    `;
+    const item = existingItems.get(String(dl.id)) || createDownloadItem(dl);
+    updateDownloadItem(item, dl);
     panel.appendChild(item);
+    existingItems.delete(String(dl.id));
   });
+
+  existingItems.forEach(item => item.remove());
 
   // Bind buttons
   panel.querySelectorAll('.btn-dl-logs').forEach(btn => {
@@ -151,6 +235,12 @@ function renderDownloads() {
   });
   panel.querySelectorAll('.btn-dl-cancel').forEach(btn => {
     btn.addEventListener('click', () => cancelDownload(btn.dataset.id));
+  });
+  panel.querySelectorAll('.btn-dl-pause').forEach(btn => {
+    btn.addEventListener('click', () => pauseDownload(btn.dataset.id));
+  });
+  panel.querySelectorAll('.btn-dl-resume').forEach(btn => {
+    btn.addEventListener('click', () => resumeDownload(btn.dataset.id));
   });
   panel.querySelectorAll('.btn-dl-remove').forEach(btn => {
     btn.addEventListener('click', () => removeDownload(btn.dataset.id));
@@ -181,6 +271,36 @@ async function cancelDownload(id) {
       await pollDownloads();
     } else {
       toast('Failed to cancel download', 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function pauseDownload(id) {
+  try {
+    const res = await apiFetch(`/api/downloads/${id}/pause`, { method: 'POST' });
+    if (res.ok) {
+      toast('Download paused', 'info');
+      await pollDownloads();
+    } else {
+      const data = await res.json();
+      toast(`Failed to pause: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function resumeDownload(id) {
+  try {
+    const res = await apiFetch(`/api/downloads/${id}/resume`, { method: 'POST' });
+    if (res.ok) {
+      toast('Download resumed', 'success');
+      await pollDownloads();
+    } else {
+      const data = await res.json();
+      toast(`Failed to resume: ${data.error}`, 'error');
     }
   } catch (e) {
     toast('Error: ' + e.message, 'error');
