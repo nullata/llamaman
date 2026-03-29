@@ -96,7 +96,7 @@ def _get_llamaman_managed_instances() -> list[dict]:
     return managed
 
 
-def _evict_llamaman_instances_if_needed():
+def _evict_llamaman_instances_if_needed(incoming_embedding_model: bool = False):
     """Evict oldest llamaman-managed instances to stay within limits.
 
     The limit is checked against ALL running instances (manual + managed),
@@ -107,6 +107,8 @@ def _evict_llamaman_instances_if_needed():
 
     if LLAMAMAN_MAX_MODELS <= 0:
         return  # 0 = no limit, never evict
+    if incoming_embedding_model:
+        return  # embedding launches never count toward the chat-model cap
 
     total = _count_running_instances()
     if total < LLAMAMAN_MAX_MODELS:
@@ -173,11 +175,15 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
             return inst, None
 
         existing = inst or _find_any_instance_for_model(model["path"])
+        preset = get_storage().get_preset(model["path"]) or {}
+        incoming_embedding_model = preset.get("embedding_model", False)
 
         # Always evict before launching or relaunching so we stay within
         # LLAMAMAN_MAX_MODELS.  Sleeping/stopped instances that get evicted
         # (sleeping → stopped) are still valid relaunch targets.
-        _evict_llamaman_instances_if_needed()
+        _evict_llamaman_instances_if_needed(
+            incoming_embedding_model=incoming_embedding_model,
+        )
 
         if existing and existing["status"] in ("sleeping", "stopped"):
             # relaunch_inactive_instance blocks until healthy; if it
@@ -185,8 +191,6 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
             if relaunch_inactive_instance(existing["id"]):
                 return existing, None
             return None, "failed to wake model"
-
-        preset = get_storage().get_preset(model["path"]) or {}
 
         port = find_available_port()
         if port is None:
