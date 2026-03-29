@@ -53,6 +53,31 @@ def _public_instance(inst: dict) -> dict:
         }
     return d
 
+
+def _merge_preset_into_config(model_path: str, config: dict) -> dict:
+    """Overlay the latest saved preset onto an instance config."""
+    from storage import get_storage
+
+    merged = dict(config)
+    preset = get_storage().get_preset(model_path) or {}
+    if preset:
+        for key in (
+            "n_gpu_layers",
+            "ctx_size",
+            "threads",
+            "parallel",
+            "extra_args",
+            "gpu_devices",
+            "idle_timeout_min",
+            "max_concurrent",
+            "max_queue_depth",
+            "share_queue",
+            "embedding_model",
+        ):
+            if key in preset:
+                merged[key] = preset[key]
+    return merged
+
 def wait_for_healthy(port: int, timeout: float = 120) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -73,26 +98,16 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
             return inst is not None and inst["status"] in ("healthy", "starting")
 
         prior_status = inst["status"]
-        config = dict(inst["config"])
+        config = _merge_preset_into_config(inst["model_path"], inst["config"])
         model_path = inst["model_path"]
         internal_port = inst.get("_internal_port", inst["port"])
 
-    # Reload current preset settings so changes made while the model was
-    # inactive are picked up on relaunch.
-    from storage import get_storage
-    preset = get_storage().get_preset(model_path) or {}
-    if preset:
-        for key in ("n_gpu_layers", "ctx_size", "threads", "parallel",
-                     "extra_args", "gpu_devices", "idle_timeout_min",
-                     "max_concurrent", "max_queue_depth", "share_queue",
-                     "embedding_model"):
-            if key in preset:
-                config[key] = preset[key]
-        # Persist the updated config back to the instance record
-        with instances_lock:
-            inst = instances.get(inst_id)
-            if inst:
-                inst["config"] = config
+    # Persist the updated config back to the instance record so the UI and
+    # future restarts reflect the latest saved preset.
+    with instances_lock:
+        inst = instances.get(inst_id)
+        if inst:
+            inst["config"] = config
 
     gpu_devices = config.get("gpu_devices")
 
@@ -385,7 +400,7 @@ def api_instances_restart(inst_id):
             return jsonify({"error": "Instance must be stopped or sleeping before restarting"}), 409
         old = {
             **old,
-            "config": dict(old.get("config", {})),
+            "config": _merge_preset_into_config(old["model_path"], old.get("config", {})),
             "stats": dict(old.get("stats", {})),
         }
         model_path = old["model_path"]
