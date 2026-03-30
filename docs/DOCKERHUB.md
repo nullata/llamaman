@@ -107,7 +107,7 @@ services:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent chat models via the proxy. Uses LRU eviction when the limit is reached. `0` = unlimited. |
+| `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent **chat** models via the proxy. Uses LRU eviction when the limit is reached. `0` = unlimited. |
 | `LLAMAMAN_IDLE_TIMEOUT` | `0` | Idle timeout in minutes for proxy-managed instances. Stopped instances auto-restart on next request. `0` = disabled. |
 | `LLAMAMAN_PROXY_PORT` | `42069` | Port for the Ollama-compatible proxy. |
 | `MODELS_DIR` | `/models` | Directory scanned for model files. |
@@ -130,6 +130,16 @@ services:
 3. Create an admin account on the `/setup` page
 4. Place GGUF model files in the `models/` volume, or download from HuggingFace via the UI
 
+## Cleanup Settings
+
+The UI provides automatic cleanup under **Settings >> Cleanup Settings**:
+
+- **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads - active downloads are never touched.
+- **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances - running instances are never removed.
+- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their actual OS process. Records whose backing process is no longer alive are marked stopped. Configurable check interval (default: 5 minutes).
+
+Cleanup runs periodically in the background. These settings only remove or update records in the UI/state - they do not delete model files.
+
 ## OpenWebUI Integration
 
 Point OpenWebUI at the Ollama-compatible proxy:
@@ -140,7 +150,15 @@ open-webui:
     - OLLAMA_BASE_URL=http://llamaman:42069
 ```
 
-LlamaMan auto-launches models on demand. When a user selects a model in OpenWebUI, a llama-server is started automatically using saved presets or defaults.
+LlamaMan auto-launches models on demand:
+
+1. OpenWebUI calls `/api/tags` and gets the available models.
+2. A request to `/api/chat` or `/api/generate` starts the selected model automatically using saved presets or defaults.
+3. When `LLAMAMAN_MAX_MODELS` is reached, the proxy evicts the least-recently-used **Ollama-managed** chat model first.
+
+Supported Ollama endpoints: `/api/tags`, `/api/chat`, `/api/generate`, `/api/show`, `/api/version`, `/api/ps`
+
+Also supports OpenAI-compatible auto-start endpoints: `/v1/models`, `/v1/chat/completions`
 
 ### With authentication enabled (default)
 
@@ -153,6 +171,27 @@ open-webui:
     - OPENAI_API_BASE_URLS=http://llamaman:42069/v1
     - OPENAI_API_KEYS=llm-your-api-key-here
 ```
+
+### Model eviction policy
+
+The `LLAMAMAN_MAX_MODELS` limit controls how many **chat** models the proxy keeps loaded simultaneously.
+
+| Launcher | Eviction behavior | Cannot evict |
+|---|---|---|
+| **Admin UI** | Evicts Ollama-managed models first (LRU), then admin-launched models if needed | - |
+| **Ollama API** (`/api/chat`, `/api/generate`) | Evicts Ollama-managed models (LRU) | Admin-launched models by default |
+| **OpenAI API** (`/v1/chat/completions`) | Does not evict; only starts a model if a slot is free | Everything |
+
+Two settings under **Settings >> App Settings** control this behavior:
+
+- **Enforce `LLAMAMAN_MAX_MODELS` for admin UI launches** - when on, the admin UI evicts the LRU model before launching. When off (default), the UI prompts before exceeding the cap.
+- **Allow Ollama API to evict admin-launched models** - when on, the Ollama API may evict admin-launched models as a fallback. Off by default. This does not affect the OpenAI API, which never evicts.
+
+Other details:
+
+- All running chat instances count toward the limit, including admin-launched and proxy-managed instances.
+- Embedding models are excluded from the limit and are never evicted.
+- `LLAMAMAN_MAX_MODELS=0` disables eviction entirely.
 
 ## Requirements
 
