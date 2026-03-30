@@ -109,9 +109,9 @@ def api_system_info():
         else:
             vm = psutil.virtual_memory()
             ram_total_mb = round(vm.total / (1024 * 1024))
-            ram_used_mb = round(vm.used / (1024 * 1024))
             ram_free_mb = round(vm.available / (1024 * 1024))
-            ram_percent = vm.percent
+            ram_used_mb = max(ram_total_mb - ram_free_mb, 0)
+            ram_percent = round(ram_used_mb / ram_total_mb * 100, 1) if ram_total_mb > 0 else 0
 
         return jsonify({
             "cpu_percent": cpu_percent,
