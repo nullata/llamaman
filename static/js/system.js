@@ -134,6 +134,14 @@ async function loadSettings() {
       adminUiEvictionToggle.checked = !!s.admin_ui_enforce_max_models;
       updateAdminUiEvictionHint();
     }
+    const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
+    if (ollamaOverrideToggle) ollamaOverrideToggle.checked = !!s.allow_ollama_api_override_admin;
+
+    const staleEnabled = document.getElementById('s-stale-records-enabled');
+    if (staleEnabled) staleEnabled.checked = !!c.stale_records_enabled;
+    const staleInterval = document.getElementById('s-stale-records-interval');
+    if (staleInterval) staleInterval.value = c.stale_records_interval_min ?? 5;
+    renderCleanupLastRan('s-stale-records-last-ran', c.stale_records_last_run_at);
 
     await loadHuggingFaceTokens();
   } catch (e) {}
@@ -161,6 +169,8 @@ async function saveSettings() {
       downloads_max_age_hours: parseInt(document.getElementById('s-dl-cleanup-age').value) || 24,
       instances_enabled: document.getElementById('s-inst-cleanup-enabled').checked,
       instances_max_age_hours: parseInt(document.getElementById('s-inst-cleanup-age').value) || 24,
+      stale_records_enabled: document.getElementById('s-stale-records-enabled').checked,
+      stale_records_interval_min: parseInt(document.getElementById('s-stale-records-interval').value) || 5,
     }
   };
   try {
@@ -232,26 +242,25 @@ async function saveRequireAuth() {
   }
 }
 
-async function saveAdminUiEvictionPolicy() {
-  const toggle = document.getElementById('s-admin-ui-enforce-max-models');
-  if (!toggle) return;
+async function saveAppSettings() {
+  const adminToggle = document.getElementById('s-admin-ui-enforce-max-models');
+  const ollamaToggle = document.getElementById('s-allow-ollama-override-admin');
+  if (!adminToggle && !ollamaToggle) return;
   try {
+    const payload = {};
+    if (adminToggle) payload.admin_ui_enforce_max_models = adminToggle.checked;
+    if (ollamaToggle) payload.allow_ollama_api_override_admin = ollamaToggle.checked;
     const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_ui_enforce_max_models: toggle.checked }),
+      body: JSON.stringify(payload),
     });
     if (res && res.ok) {
       updateAdminUiEvictionHint();
-      toast(
-        toggle.checked
-          ? 'Admin UI launches will enforce LLAMAMAN_MAX_MODELS'
-          : 'Admin UI launches will prompt before exceeding LLAMAMAN_MAX_MODELS',
-        'info',
-      );
+      toast('App settings saved', 'info');
     }
   } catch (e) {
-    toast('Error saving admin launch policy: ' + e.message, 'error');
+    toast('Error saving app settings: ' + e.message, 'error');
   }
 }
 
@@ -262,7 +271,12 @@ if (requireAuthToggle) {
 
 const adminUiEvictionToggle = document.getElementById('s-admin-ui-enforce-max-models');
 if (adminUiEvictionToggle) {
-  adminUiEvictionToggle.addEventListener('change', saveAdminUiEvictionPolicy);
+  adminUiEvictionToggle.addEventListener('change', saveAppSettings);
+}
+
+const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
+if (ollamaOverrideToggle) {
+  ollamaOverrideToggle.addEventListener('change', saveAppSettings);
 }
 
 const saveSettingsBtn = document.getElementById('btn-save-settings');

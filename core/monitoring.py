@@ -20,6 +20,8 @@ _CLEANUP_INTERVAL = 3600  # run at most once per hour
 _last_orphan_scan_at: float = 0.0
 _ORPHAN_SCAN_INTERVAL = 60  # seconds
 
+_last_stale_cleanup_at: float = 0.0
+
 
 def _run_cleanup() -> None:
     from storage import get_storage
@@ -71,8 +73,76 @@ def _run_cleanup() -> None:
 
 
 
+def _run_stale_record_cleanup() -> None:
+    """Remove instance records whose backing process is no longer alive."""
+    from storage import get_storage
+    storage = get_storage()
+    cleanup = storage.get_settings().get("cleanup", {})
+    if not cleanup.get("stale_records_enabled"):
+        return
+
+    changed = False
+    now = time.time()
+
+    with idle_proxies_lock:
+        live_proxies = set(idle_proxies.keys())
+
+    with instances_lock:
+        inst_ids = list(instances.keys())
+
+    for inst_id in inst_ids:
+        with instances_lock:
+            inst = instances.get(inst_id)
+            if inst is None:
+                continue
+            status = inst["status"]
+            proc = inst.get("_process")
+            pid = inst.get("pid", 0)
+
+        if status in ("starting", "healthy"):
+            process_dead = False
+            if proc is not None:
+                process_dead = proc.poll() is not None
+            elif pid > 0:
+                process_dead = not is_pid_alive(pid) or not is_llama_pid(pid)
+
+            if process_dead:
+                with instances_lock:
+                    inst = instances.get(inst_id)
+                    if inst and inst["status"] not in ("stopped", "sleeping"):
+                        kill_instance_process(inst)
+                        inst["status"] = "stopped"
+                        stats = inst.setdefault("stats", {})
+                        stats["crash_count"] = stats.get("crash_count", 0) + 1
+                        logger.info(
+                            "Stale record cleanup: marked %s stopped (process dead, crashes: %d)",
+                            inst_id, stats["crash_count"],
+                        )
+                        changed = True
+
+        elif status == "sleeping":
+            # A sleeping instance with no proxy and a dead PID is a stale record.
+            has_proxy = inst_id in live_proxies
+            if not has_proxy:
+                pid_alive = pid > 0 and is_pid_alive(pid) and is_llama_pid(pid)
+                if not pid_alive:
+                    with instances_lock:
+                        inst = instances.get(inst_id)
+                        if inst and inst["status"] == "sleeping":
+                            inst["status"] = "stopped"
+                            logger.info(
+                                "Stale record cleanup: marked sleeping %s stopped (no proxy, dead pid)",
+                                inst_id,
+                            )
+                            changed = True
+
+    if changed:
+        save_state()
+    storage.merge_settings({"cleanup": {"stale_records_last_run_at": now}})
+
+
 def _background_poller():
-    global _last_cleanup_at, _last_orphan_scan_at
+    global _last_cleanup_at, _last_orphan_scan_at, _last_stale_cleanup_at
     while True:
         time.sleep(5)
 
@@ -85,6 +155,24 @@ def _background_poller():
                 _run_cleanup()
             except Exception as e:
                 logger.warning("Cleanup error: %s", e)
+
+        # --- Stale record cleanup ---
+        try:
+            from storage import get_storage
+            stale_interval_min = (
+                get_storage().get_settings()
+                .get("cleanup", {})
+                .get("stale_records_interval_min", 5)
+            ) or 5
+            stale_interval_s = stale_interval_min * 60
+        except Exception:
+            stale_interval_s = 300
+        if now - _last_stale_cleanup_at >= stale_interval_s:
+            _last_stale_cleanup_at = now
+            try:
+                _run_stale_record_cleanup()
+            except Exception as e:
+                logger.warning("Stale record cleanup error: %s", e)
 
         # --- Periodic orphan scan ---
         if now - _last_orphan_scan_at >= _ORPHAN_SCAN_INTERVAL:
