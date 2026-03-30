@@ -201,9 +201,18 @@ async function updatePortSuggestion() {
 }
 
 function readLaunchForm() {
+  const ctxSizeRaw = document.getElementById('f-ctx-size').value.trim();
+  if (!ctxSizeRaw) {
+    throw new Error('Context size is required');
+  }
+  const ctxSize = parseInt(ctxSizeRaw, 10);
+  if (!Number.isInteger(ctxSize) || ctxSize <= 0) {
+    throw new Error('Context size must be a positive integer');
+  }
+
   const body = {
     n_gpu_layers: parseInt(document.getElementById('f-gpu-layers').value),
-    ctx_size: parseInt(document.getElementById('f-ctx-size').value),
+    ctx_size: ctxSize,
     extra_args: document.getElementById('f-extra').value.trim(),
     gpu_devices: document.getElementById('f-gpu-devices').value.trim(),
     idle_timeout_min: parseInt(document.getElementById('f-idle-timeout').value) || 0,
@@ -279,7 +288,8 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
     if (res.ok) {
       toast('Preset saved', 'success');
     } else {
-      toast('Failed to save preset', 'error');
+      const data = await readApiResponse(res);
+      toast(`Failed to save preset: ${data.error || 'unknown error'}`, 'error');
     }
   } catch (e) {
     toast('Error saving preset: ' + e.message, 'error');

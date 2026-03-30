@@ -362,6 +362,22 @@ def api_instances_create():
     if not model_path:
         return jsonify({"error": "model_path is required"}), 400
 
+    ctx_size, ctx_err = _parse_required_positive_int(body, "ctx_size")
+    if ctx_err:
+        return jsonify({"error": ctx_err}), 400
+
+    incoming_embedding_model = bool(body.get("embedding_model", False))
+    confirm_overcommit = bool(body.get("confirm_overcommit", False))
+    if _admin_ui_enforces_eviction():
+        _evict_instances_for_ui_launch_if_needed(
+            incoming_embedding_model=incoming_embedding_model,
+        )
+    elif _would_ui_launch_exceed_limit(incoming_embedding_model=incoming_embedding_model) and not confirm_overcommit:
+        return jsonify({
+            "error": f"You're about to launch an instance beyond LLAMAMAN_MAX_MODELS={LLAMAMAN_MAX_MODELS}. Do you want to proceed?",
+            "confirm_required": True,
+        }), 409
+
     inst, err = launch_instance(
         model_path=model_path,
         port=int(body.get("port", 8000)),
@@ -392,6 +408,7 @@ def api_instances_delete(inst_id):
 
 @bp.route("/api/instances/<inst_id>/restart", methods=["POST"])
 def api_instances_restart(inst_id):
+    body = request.get_json(silent=True) or {}
     with instances_lock:
         old = instances.get(inst_id)
         if old is None:
