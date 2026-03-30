@@ -184,7 +184,8 @@ The `LLAMAMAN_MAX_MODELS` limit controls how many **chat** models the proxy will
 Key details:
 
 - **All running instances count toward the limit** - both manually launched instances (from the LlamaMan UI) and proxy-managed ones. If you manually launch 2 models and `LLAMAMAN_MAX_MODELS=1`, the proxy sees you're already over the limit.
-- **Only proxy-managed instances are evicted.** Manually launched instances are never killed by the eviction policy. If all running instances are manual, the proxy will still launch the requested model without evicting anything - your manual instances are sacrosanct.
+- **Proxy auto-launch only evicts proxy-managed instances.** Normal incoming inference requests will never kill manually launched instances.
+- **Admin UI launches are configurable.** A dashboard toggle controls whether launching from the admin UI should evict the least-recently-used non-embedding instance to stay within the cap, or instead prompt you and allow launching beyond the cap.
 - **Embedding models are excluded.** Instances marked as **Embedding Model** do not count toward the limit and are never evicted. This lets you keep an embedding model loaded permanently alongside your chat models.
 - **`LLAMAMAN_MAX_MODELS=0` (default) disables eviction entirely.** The proxy will launch models on demand without ever stopping existing ones.
 

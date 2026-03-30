@@ -129,6 +129,12 @@ async function loadSettings() {
     const speedLimit = document.getElementById('s-global-speed-limit');
     if (speedLimit) speedLimit.value = s.global_speed_limit_mbps ?? 0;
 
+    const adminUiEvictionToggle = document.getElementById('s-admin-ui-enforce-max-models');
+    if (adminUiEvictionToggle) {
+      adminUiEvictionToggle.checked = !!s.admin_ui_enforce_max_models;
+      updateAdminUiEvictionHint();
+    }
+
     await loadHuggingFaceTokens();
   } catch (e) {}
 }
@@ -195,6 +201,15 @@ function updateAuthHint() {
     : 'Model loading endpoints are open. Only management endpoints require authentication.';
 }
 
+function updateAdminUiEvictionHint() {
+  const hint = document.getElementById('admin-ui-eviction-hint');
+  const toggle = document.getElementById('s-admin-ui-enforce-max-models');
+  if (!hint || !toggle) return;
+  hint.textContent = toggle.checked
+    ? 'Admin UI launches will evict the least-recently-used non-embedding model when the cap is full.'
+    : 'Admin UI launches can go beyond the cap after a confirmation prompt instead of evicting an existing model.';
+}
+
 async function saveRequireAuth() {
   const toggle = document.getElementById('s-require-auth');
   if (!toggle) return;
@@ -217,9 +232,37 @@ async function saveRequireAuth() {
   }
 }
 
+async function saveAdminUiEvictionPolicy() {
+  const toggle = document.getElementById('s-admin-ui-enforce-max-models');
+  if (!toggle) return;
+  try {
+    const res = await apiFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ admin_ui_enforce_max_models: toggle.checked }),
+    });
+    if (res && res.ok) {
+      updateAdminUiEvictionHint();
+      toast(
+        toggle.checked
+          ? 'Admin UI launches will enforce LLAMAMAN_MAX_MODELS'
+          : 'Admin UI launches will prompt before exceeding LLAMAMAN_MAX_MODELS',
+        'info',
+      );
+    }
+  } catch (e) {
+    toast('Error saving admin launch policy: ' + e.message, 'error');
+  }
+}
+
 const requireAuthToggle = document.getElementById('s-require-auth');
 if (requireAuthToggle) {
   requireAuthToggle.addEventListener('change', saveRequireAuth);
+}
+
+const adminUiEvictionToggle = document.getElementById('s-admin-ui-enforce-max-models');
+if (adminUiEvictionToggle) {
+  adminUiEvictionToggle.addEventListener('change', saveAdminUiEvictionPolicy);
 }
 
 const saveSettingsBtn = document.getElementById('btn-save-settings');

@@ -172,6 +172,17 @@
                     <span class="toggle-slider"></span>
                   </label>
                 </div>
+                <div class="form-group full cleanup-toggle-grid">
+                  <label for="s-admin-ui-enforce-max-models">Enforce `LLAMAMAN_MAX_MODELS` for admin UI launches</label>
+                  <label class="toggle-switch" for="s-admin-ui-enforce-max-models"
+                    aria-label="Enforce LLAMAMAN_MAX_MODELS for admin UI launches">
+                    <input id="s-admin-ui-enforce-max-models" type="checkbox" />
+                    <span class="toggle-slider"></span>
+                  </label>
+                </div>
+                <div class="form-group full">
+                  <p id="admin-ui-eviction-hint" class="hint-text">When off, admin UI launches can go beyond the cap after a confirmation prompt instead of evicting an existing model.</p>
+                </div>
               </div>
               <div class="form-actions">
                 <button class="btn btn-primary" type="submit" id="btn-launch"><i class="fa-solid fa-rocket"></i>

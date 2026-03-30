@@ -13,6 +13,7 @@ from config import (
     HEALTH_CHECK_TIMEOUT,
     INTERNAL_PORT_RANGE_END,
     INTERNAL_PORT_RANGE_START,
+    LLAMAMAN_MAX_MODELS,
     LOGS_DIR,
     MODEL_LOAD_TIMEOUT,
     PORT_RANGE_END,
@@ -30,6 +31,7 @@ from proxy import (
     create_gate, get_gate, remove_gate, refresh_gate,
     start_idle_proxy, stop_idle_proxy,
 )
+from storage import get_storage
 
 bp = Blueprint("instances", __name__)
 
@@ -77,6 +79,80 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             if key in preset:
                 merged[key] = preset[key]
     return merged
+
+
+def _parse_required_positive_int(body: dict, field_name: str) -> tuple[int | None, str | None]:
+    raw = body.get(field_name)
+    if raw in (None, ""):
+        return None, f"{field_name} is required"
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None, f"{field_name} must be an integer"
+    if value <= 0:
+        return None, f"{field_name} must be greater than 0"
+    return value, None
+
+
+def _admin_ui_enforces_eviction() -> bool:
+    settings = get_storage().get_settings()
+    return bool(settings.get("admin_ui_enforce_max_models", False))
+
+
+def _count_running_chat_instances(exclude_instance_id: str | None = None) -> int:
+    with instances_lock:
+        return sum(
+            1 for inst in instances.values()
+            if inst["id"] != exclude_instance_id
+            and inst["status"] not in ("stopped",)
+            and not inst.get("config", {}).get("embedding_model", False)
+        )
+
+
+def _would_ui_launch_exceed_limit(
+    incoming_embedding_model: bool = False,
+    exclude_instance_id: str | None = None,
+) -> bool:
+    if LLAMAMAN_MAX_MODELS <= 0 or incoming_embedding_model:
+        return False
+    return _count_running_chat_instances(exclude_instance_id=exclude_instance_id) >= LLAMAMAN_MAX_MODELS
+
+
+def _get_lru_chat_instances(exclude_instance_id: str | None = None) -> list[dict]:
+    with instances_lock:
+        candidates = [
+            inst for inst in instances.values()
+            if inst["id"] != exclude_instance_id
+            and inst["status"] not in ("stopped",)
+            and not inst.get("config", {}).get("embedding_model", False)
+        ]
+    candidates.sort(key=lambda inst: inst.get("_last_request_at", inst.get("started_at", 0)))
+    return candidates
+
+
+def _evict_instances_for_ui_launch_if_needed(
+    incoming_embedding_model: bool = False,
+    exclude_instance_id: str | None = None,
+) -> None:
+    if LLAMAMAN_MAX_MODELS <= 0 or incoming_embedding_model:
+        return
+
+    total = _count_running_chat_instances(exclude_instance_id=exclude_instance_id)
+    if total < LLAMAMAN_MAX_MODELS:
+        return
+
+    to_free = total - LLAMAMAN_MAX_MODELS + 1
+    freed = 0
+    for victim in _get_lru_chat_instances(exclude_instance_id=exclude_instance_id):
+        if freed >= to_free:
+            break
+        logger.info(
+            "ui: evicting %s (port %d) to make room (%d/%d total, max %d)",
+            victim["model_name"], victim["port"], total - freed, total, LLAMAMAN_MAX_MODELS,
+        )
+        stop_instance_by_id(victim["id"])
+        freed += 1
+
 
 def wait_for_healthy(port: int, timeout: float = 120) -> bool:
     deadline = time.monotonic() + timeout
@@ -382,7 +458,7 @@ def api_instances_create():
         model_path=model_path,
         port=int(body.get("port", 8000)),
         n_gpu_layers=int(body.get("n_gpu_layers", -1)),
-        ctx_size=int(body.get("ctx_size", 4096)),
+        ctx_size=ctx_size,
         threads=body.get("threads"),
         parallel=body.get("parallel"),
         extra_args=body.get("extra_args", "").strip(),
@@ -423,6 +499,22 @@ def api_instances_restart(inst_id):
         model_path = old["model_path"]
         config = old["config"]
         preferred_port = old["port"]
+
+    incoming_embedding_model = bool(config.get("embedding_model", False))
+    confirm_overcommit = bool(body.get("confirm_overcommit", False))
+    if _admin_ui_enforces_eviction():
+        _evict_instances_for_ui_launch_if_needed(
+            incoming_embedding_model=incoming_embedding_model,
+            exclude_instance_id=inst_id,
+        )
+    elif _would_ui_launch_exceed_limit(
+        incoming_embedding_model=incoming_embedding_model,
+        exclude_instance_id=inst_id,
+    ) and not confirm_overcommit:
+        return jsonify({
+            "error": f"You're about to launch an instance beyond LLAMAMAN_MAX_MODELS={LLAMAMAN_MAX_MODELS}. Do you want to proceed?",
+            "confirm_required": True,
+        }), 409
 
     # Release any old proxy/gate reservations before we pick ports for the
     # replacement instance. This lets restarts reuse the same public port and
