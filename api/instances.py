@@ -118,7 +118,10 @@ def _would_ui_launch_exceed_limit(
     return _count_running_chat_instances(exclude_instance_id=exclude_instance_id) >= LLAMAMAN_MAX_MODELS
 
 
-def _get_lru_chat_instances(exclude_instance_id: str | None = None) -> list[dict]:
+def _get_lru_chat_instances(
+    exclude_instance_id: str | None = None,
+    ollama_managed_first: bool = False,
+) -> list[dict]:
     with instances_lock:
         candidates = [
             inst for inst in instances.values()
@@ -126,7 +129,15 @@ def _get_lru_chat_instances(exclude_instance_id: str | None = None) -> list[dict
             and inst["status"] not in ("stopped",)
             and not inst.get("config", {}).get("embedding_model", False)
         ]
-    candidates.sort(key=lambda inst: inst.get("_last_request_at", inst.get("started_at", 0)))
+    if ollama_managed_first:
+        # Ollama-managed (True) sorts before admin-UI (False/absent) so that
+        # admin UI launches always evict API-managed models first.
+        candidates.sort(key=lambda inst: (
+            not inst.get("_llamaman_managed", False),
+            inst.get("_last_request_at", inst.get("started_at", 0)),
+        ))
+    else:
+        candidates.sort(key=lambda inst: inst.get("_last_request_at", inst.get("started_at", 0)))
     return candidates
 
 
@@ -143,7 +154,10 @@ def _evict_instances_for_ui_launch_if_needed(
 
     to_free = total - LLAMAMAN_MAX_MODELS + 1
     freed = 0
-    for victim in _get_lru_chat_instances(exclude_instance_id=exclude_instance_id):
+    for victim in _get_lru_chat_instances(
+        exclude_instance_id=exclude_instance_id,
+        ollama_managed_first=True,
+    ):
         if freed >= to_free:
             break
         logger.info(

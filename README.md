@@ -171,7 +171,7 @@ open-webui:
 2. User selects a model in OpenWebUI -> `/api/chat` request arrives
 3. LlamaMan auto-launches a llama-server (using saved preset or defaults)
 4. Waits for healthy, then proxies the request with format translation
-5. When `LLAMAMAN_MAX_MODELS` limit is reached, the least-recently-used model is evicted
+5. When `LLAMAMAN_MAX_MODELS` limit is reached, the least-recently-used **Ollama-managed** model is evicted. Admin UI launched models are protected from API eviction by default (see [Model eviction policy](#model-eviction-policy))
 
 Supported Ollama endpoints: `/api/tags`, `/api/chat`, `/api/generate`, `/api/show`, `/api/version`, `/api/ps`
 
@@ -179,13 +179,32 @@ Also supports OpenAI-compatible endpoints with auto-start: `/v1/models`, `/v1/ch
 
 ### Model eviction policy
 
-The `LLAMAMAN_MAX_MODELS` limit controls how many **chat** models the proxy will keep loaded simultaneously. When a new model is requested and the limit is reached, the least-recently-used chat model is evicted.
+The `LLAMAMAN_MAX_MODELS` limit controls how many **chat** models the proxy will keep loaded simultaneously. When a new model is requested and the limit is reached, the least-recently-used (LRU) chat model is evicted to make room.
 
-Key details:
+#### Priority rules
 
-- **All running instances count toward the limit** - both manually launched instances (from the LlamaMan UI) and proxy-managed ones. If you manually launch 2 models and `LLAMAMAN_MAX_MODELS=1`, the proxy sees you're already over the limit.
-- **Proxy auto-launch only evicts proxy-managed instances.** Normal incoming inference requests will never kill manually launched instances.
-- **Admin UI launches are configurable.** A dashboard toggle controls whether launching from the admin UI should evict the least-recently-used non-embedding instance to stay within the cap, or instead prompt you and allow launching beyond the cap.
+Admin UI launched models have ultimate priority. The Ollama/OpenAI API can only evict models it launched itself:
+
+| Launcher | Can evict | Cannot evict (default) |
+|----------|-----------|------------------------|
+| **Admin UI** | Any model (Ollama-managed first, then admin UI by LRU) | - |
+| **Ollama/OpenAI API** | Ollama-managed models (LRU) | Admin UI launched models |
+
+If the cap is full and all running instances were launched from the admin UI, API requests for a new model will fail with HTTP 503:
+```
+model limit reached (LLAMAMAN_MAX_MODELS=N); admin-launched models cannot be evicted via the API
+```
+
+#### App Settings toggles
+
+Two toggles in **Settings >> App Settings** control eviction behavior:
+
+- **Enforce `LLAMAMAN_MAX_MODELS` for admin UI launches** - when on, the admin UI silently evicts the LRU model (Ollama-managed first) before launching. When off (default), the UI prompts you to confirm before exceeding the cap.
+- **Allow Ollama/OpenAI API to evict admin-launched models** - when on, the API can also evict admin UI launched models as a fallback if no Ollama-managed models are available to evict. Off by default.
+
+#### Other details
+
+- **All running instances count toward the limit** - both admin UI and proxy-managed instances. If you manually launch 2 models and `LLAMAMAN_MAX_MODELS=1`, the proxy sees you are already over the limit.
 - **Embedding models are excluded.** Instances marked as **Embedding Model** do not count toward the limit and are never evicted. This lets you keep an embedding model loaded permanently alongside your chat models.
 - **`LLAMAMAN_MAX_MODELS=0` (default) disables eviction entirely.** The proxy will launch models on demand without ever stopping existing ones.
 
@@ -342,6 +361,8 @@ Leave `filename` blank to download the full repository.
 ```json
 {
   "require_auth": true,
+  "admin_ui_enforce_max_models": false,
+  "allow_ollama_api_override_admin": false,
   "cleanup": {
     "downloads_enabled": true,
     "downloads_max_age_hours": 24,
