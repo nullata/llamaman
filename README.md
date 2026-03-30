@@ -133,7 +133,7 @@ When **Max Concurrent** is set to a value greater than 0, LlamaMan places a conc
 
 The gate tracks active and queued request counts, which are visible in the instance list via the API.
 
-**Parallel vs Max Concurrent:** `Parallel` controls how many sequences the llama-server processes internally (KV cache slots). `Max Concurrent` is an external gate that limits how many requests LlamaMan forwards to the server at once. You can use both together — for example, `Parallel=4` with `Max Concurrent=4` ensures the server always has enough KV slots for the requests it receives.
+**Parallel vs Max Concurrent:** `Parallel` controls how many sequences the llama-server processes internally (KV cache slots). `Max Concurrent` is an external gate that limits how many requests LlamaMan forwards to the server at once. You can use both together - for example, `Parallel=4` with `Max Concurrent=4` ensures the server always has enough KV slots for the requests it receives.
 
 ## Idle Timeout
 
@@ -148,12 +148,13 @@ For instances managed by the llamaman proxy (OpenWebUI), use the `LLAMAMAN_IDLE_
 
 ## Cleanup Settings
 
-The UI provides automatic cleanup of stale records under **Settings**:
+The UI provides automatic cleanup under **Settings >> Cleanup Settings**:
 
-- **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads — active downloads are never touched.
-- **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances — running instances are never removed.
+- **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads - active downloads are never touched.
+- **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances - running instances are never removed.
+- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their actual OS process. Records whose backing process is no longer alive are marked stopped. Configurable check interval (default: 5 minutes). Useful for catching crashes the normal health-check loop may have missed.
 
-Cleanup runs periodically in the background. These settings only remove records from the UI/state — they do not delete model files or stop running processes.
+Cleanup runs periodically in the background. These settings only remove or update records in the UI/state - they do not delete model files.
 
 ## OpenWebUI Integration (llamaman proxy)
 
@@ -369,7 +370,10 @@ Leave `filename` blank to download the full repository.
     "downloads_last_run_at": 1710000000,
     "instances_enabled": false,
     "instances_max_age_hours": 48,
-    "instances_last_run_at": 1710000000
+    "instances_last_run_at": 1710000000,
+    "stale_records_enabled": false,
+    "stale_records_interval_min": 5,
+    "stale_records_last_run_at": null
   }
 }
 ```
