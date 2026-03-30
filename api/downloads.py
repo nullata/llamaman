@@ -49,6 +49,34 @@ def _spawn_download_process(dl_id: str, repo_id: str, dest_path: str, filename: 
     return proc, log_fh, log_file
 
 
+def _resolve_download_token(dl: dict) -> tuple[str | None, str | None]:
+    token = dl.get("_hf_token", "")
+    token_id = dl.get("_hf_token_id", "")
+    if not token and token_id:
+        token = get_hf_token_secret(token_id)
+        if not token:
+            return None, "Saved Hugging Face token is no longer available"
+    return token, None
+
+
+def _restart_existing_download(dl: dict):
+    token, err = _resolve_download_token(dl)
+    if err:
+        return None, None, None, err
+    try:
+        return (*_spawn_download_process(
+            dl["id"],
+            dl["repo_id"],
+            dl["dest_path"],
+            dl.get("filename", ""),
+            token or "",
+            float(dl.get("per_model_speed_limit_mbps", 0) or 0),
+            log_mode="a",
+        ), None)
+    except Exception as e:
+        return None, None, None, str(e)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -126,7 +154,6 @@ def api_downloads_get(dl_id):
 
 @bp.route("/api/downloads/<dl_id>/pause", methods=["POST"])
 def api_downloads_pause(dl_id):
-    exited_dest_path = ""
     exited_status = ""
     with downloads_lock:
         dl = downloads.get(dl_id)
@@ -142,8 +169,6 @@ def api_downloads_pause(dl_id):
                 dl["status"] = "completed" if exit_code == 0 else "failed"
                 dl["pid"] = 0
                 exited_status = dl["status"]
-                if exit_code != 0:
-                    exited_dest_path = dl.get("dest_path", "")
             else:
                 kill_instance_process(dl)
                 dl["status"] = "paused"
@@ -153,9 +178,6 @@ def api_downloads_pause(dl_id):
             dl["pid"] = 0
 
     save_state()
-    if exited_dest_path:
-        cleanup_download_dir(exited_dest_path)
-        logger.info("Download %s failed while pausing - cleaned up %s", dl_id, exited_dest_path)
     if exited_status:
         return jsonify({"error": f"Download already {exited_status}"}), 409
     logger.info("Download paused: %s", dl_id)
@@ -171,24 +193,10 @@ def api_downloads_resume(dl_id):
         if dl["status"] != "paused":
             return jsonify({"error": "Only paused downloads can be resumed"}), 409
 
-        try:
-            token = dl.get("_hf_token", "")
-            token_id = dl.get("_hf_token_id", "")
-            if not token and token_id:
-                token = get_hf_token_secret(token_id)
-                if not token:
-                    return jsonify({"error": "Saved Hugging Face token is no longer available"}), 409
-            proc, log_fh, log_file = _spawn_download_process(
-                dl_id,
-                dl["repo_id"],
-                dl["dest_path"],
-                dl.get("filename", ""),
-                token,
-                float(dl.get("per_model_speed_limit_mbps", 0) or 0),
-                log_mode="a",
-            )
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
+        proc, log_fh, log_file, err = _restart_existing_download(dl)
+        if err:
+            code = 409 if "token" in err.lower() else 500
+            return jsonify({"error": err}), code
 
         dl["status"] = "downloading"
         dl["pid"] = proc.pid
@@ -198,6 +206,32 @@ def api_downloads_resume(dl_id):
 
     save_state()
     logger.info("Download resumed: %s (pid %d)", dl_id, proc.pid)
+    return jsonify(public_dict(dl))
+
+
+@bp.route("/api/downloads/<dl_id>/retry", methods=["POST"])
+def api_downloads_retry(dl_id):
+    with downloads_lock:
+        dl = downloads.get(dl_id)
+        if dl is None:
+            return jsonify({"error": "Not found"}), 404
+        if dl["status"] != "failed":
+            return jsonify({"error": "Only failed downloads can be retried"}), 409
+
+        proc, log_fh, log_file, err = _restart_existing_download(dl)
+        if err:
+            code = 409 if "token" in err.lower() else 500
+            return jsonify({"error": err}), code
+
+        dl["status"] = "downloading"
+        dl["pid"] = proc.pid
+        dl["log_file"] = log_file
+        dl["_process"] = proc
+        dl["_log_fh"] = log_fh
+        dl["started_at"] = time.time()
+
+    save_state()
+    logger.info("Download retried: %s (pid %d)", dl_id, proc.pid)
     return jsonify(public_dict(dl))
 
 
@@ -220,13 +254,18 @@ def api_downloads_cancel(dl_id):
 
 @bp.route("/api/downloads/<dl_id>/remove", methods=["DELETE"])
 def api_downloads_remove(dl_id):
+    dest_path = ""
     with downloads_lock:
         dl = downloads.get(dl_id)
         if dl is None:
             return jsonify({"error": "Not found"}), 404
         if dl["status"] in ("downloading", "paused"):
             return jsonify({"error": "Cannot remove active or paused download, cancel it first"}), 409
+        if dl["status"] in ("failed", "cancelled"):
+            dest_path = dl.get("dest_path", "")
         del downloads[dl_id]
+    if dest_path:
+        cleanup_download_dir(dest_path)
     save_state()
     return jsonify({"status": "removed"})
 

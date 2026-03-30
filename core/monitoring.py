@@ -216,18 +216,13 @@ def _background_poller():
             if exit_code is None:
                 continue
 
-            dest_path = ""
             with downloads_lock:
                 dl = downloads.get(dl_id)
                 if dl and dl["status"] not in ("cancelled",):
                     kill_instance_process(dl)
                     dl["status"] = "completed" if exit_code == 0 else "failed"
-                    if exit_code != 0:
-                        dest_path = dl.get("dest_path", "")
+                    dl["pid"] = 0
             save_state()
-            if dest_path:
-                cleanup_download_dir(dest_path)
-                logger.info("Download %s failed - cleaned up %s", dl_id, dest_path)
 
 
 def start_background_poller():
