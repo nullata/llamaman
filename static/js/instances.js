@@ -159,8 +159,25 @@ async function stopInstance(id) {
 
 async function restartInstance(id) {
   try {
-    const res = await apiFetch(`/api/instances/${id}/restart`, { method: 'POST' });
-    const data = await res.json();
+    const attemptRestart = async (confirmOvercommit = false) => {
+      const res = await apiFetch(`/api/instances/${id}/restart`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(confirmOvercommit ? { confirm_overcommit: true } : {}),
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok && data.confirm_required) {
+        const ok = await showConfirm('Launch Beyond Limit', data.error);
+        if (!ok) return { cancelled: true };
+        return await attemptRestart(true);
+      }
+      return { res, data };
+    };
+
+    const result = await attemptRestart();
+    if (result.cancelled) return;
+
+    const { res, data } = result;
     if (res.ok) {
       const msg = data.internal_port != null
         ? `Instance restarted: public ${data.port}, llama-server ${data.internal_port}`
@@ -201,9 +218,18 @@ async function updatePortSuggestion() {
 }
 
 function readLaunchForm() {
+  const ctxSizeRaw = document.getElementById('f-ctx-size').value.trim();
+  if (!ctxSizeRaw) {
+    throw new Error('Context size is required');
+  }
+  const ctxSize = parseInt(ctxSizeRaw, 10);
+  if (!Number.isInteger(ctxSize) || ctxSize <= 0) {
+    throw new Error('Context size must be a positive integer');
+  }
+
   const body = {
     n_gpu_layers: parseInt(document.getElementById('f-gpu-layers').value),
-    ctx_size: parseInt(document.getElementById('f-ctx-size').value),
+    ctx_size: ctxSize,
     extra_args: document.getElementById('f-extra').value.trim(),
     gpu_devices: document.getElementById('f-gpu-devices').value.trim(),
     idle_timeout_min: parseInt(document.getElementById('f-idle-timeout').value) || 0,
@@ -227,17 +253,37 @@ if (launchForm) launchForm.addEventListener('submit', async (e) => {
   btn.disabled = true;
   status.textContent = 'Launching…';
 
-  const body = readLaunchForm();
-  body.model_path = document.getElementById('f-model-path').value.trim();
-  body.port = parseInt(document.getElementById('f-port').value);
-
   try {
-    const res = await apiFetch('/api/instances', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
+    const body = readLaunchForm();
+    body.model_path = document.getElementById('f-model-path').value.trim();
+    body.port = parseInt(document.getElementById('f-port').value);
+
+    const attemptLaunch = async (confirmOvercommit = false) => {
+      const launchBody = {
+        ...body,
+        ...(confirmOvercommit ? { confirm_overcommit: true } : {}),
+      };
+      const res = await apiFetch('/api/instances', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(launchBody),
+      });
+      const data = await readApiResponse(res);
+      if (!res.ok && data.confirm_required) {
+        const ok = await showConfirm('Launch Beyond Limit', data.error);
+        if (!ok) return { cancelled: true };
+        return await attemptLaunch(true);
+      }
+      return { res, data };
+    };
+
+    const result = await attemptLaunch();
+    if (result.cancelled) {
+      status.textContent = '';
+      return;
+    }
+
+    const { res, data } = result;
     if (res.ok) {
       const msg = data.internal_port != null
         ? `Instance launched: public ${data.port}, llama-server ${data.internal_port}`
@@ -268,9 +314,9 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
     toast('Select a model first', 'error');
     return;
   }
-  const body = readLaunchForm();
 
   try {
+    const body = readLaunchForm();
     const res = await apiFetch(`/api/presets${encodePathForUrl(modelPath)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -279,7 +325,8 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
     if (res.ok) {
       toast('Preset saved', 'success');
     } else {
-      toast('Failed to save preset', 'error');
+      const data = await readApiResponse(res);
+      toast(`Failed to save preset: ${data.error || 'unknown error'}`, 'error');
     }
   } catch (e) {
     toast('Error saving preset: ' + e.message, 'error');

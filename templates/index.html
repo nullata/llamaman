@@ -99,6 +99,8 @@
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-cleanup"
               aria-controls="settings-tab-cleanup" aria-selected="false" tabindex="-1" data-tab="cleanup">Cleanup
               Settings</button>
+            <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-appsettings"
+              aria-controls="settings-tab-appsettings" aria-selected="false" tabindex="-1" data-tab="appsettings">LRU</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-downloads"
               aria-controls="settings-tab-downloads" aria-selected="false" tabindex="-1" data-tab="downloads">Downloads</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-huggingface"
@@ -126,11 +128,11 @@
                     <input id="f-gpu-layers" type="number" value="-1" min="-1" />
                     <span id="gpu-layers-total" class="text-meta"></span>
                   </div>
-                  <div id="gpu-layers-suggestion" class="text-meta" style="margin-top:4px;font-size:0.82em;min-height:1.1em;"></div>
+                  <div id="gpu-layers-suggestion" class="text-meta" style="margin-top:4px;font-size:0.82em;min-height:1.1em; text-wrap: wrap;"></div>
                 </div>
                 <div class="form-group">
                   <label for="f-ctx-size">Context Size</label>
-                  <input id="f-ctx-size" type="number" value="4096" min="128" />
+                  <input id="f-ctx-size" type="number" min="1" required />
                 </div>
                 <div class="form-group">
                   <label for="f-threads">CPU Threads (optional)</label>
@@ -212,12 +214,49 @@
                 <input id="s-inst-cleanup-age" type="number" value="24" min="1" />
                 <p class="hint-text cleanup-last-ran">Last ran: <span id="s-inst-cleanup-last-ran">Never</span></p>
               </div>
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-stale-records-enabled">Auto-remove stale instance records</label>
+                <label class="toggle-switch" for="s-stale-records-enabled" aria-label="Auto-remove stale instance records">
+                  <input id="s-stale-records-enabled" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-stale-records-interval">Stale record check interval (minutes)</label>
+                <input id="s-stale-records-interval" type="number" value="5" min="1" />
+                <p class="hint-text cleanup-last-ran">Last ran: <span id="s-stale-records-last-ran">Never</span></p>
+              </div>
             </div>
+            <p class="hint-text">Stale record check marks running/sleeping instance records as stopped when their backing process is no longer alive.</p>
             <div class="form-actions">
               <button class="btn btn-secondary" type="button" id="btn-save-settings"><i
                   class="fa-solid fa-floppy-disk"></i>
                 Save</button>
               <span id="settings-status" class="status-text"></span>
+            </div>
+          </div>
+
+          <div class="tab-panel" id="settings-tab-appsettings" role="tabpanel"
+            aria-labelledby="settings-tab-btn-appsettings" data-tab-panel="appsettings" hidden>
+            <div class="cleanup-settings-grid">
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-admin-ui-enforce-max-models">Enforce <code>LLAMAMAN_MAX_MODELS</code> for admin UI launches</label>
+                <label class="toggle-switch" for="s-admin-ui-enforce-max-models"
+                  aria-label="Enforce LLAMAMAN_MAX_MODELS for admin UI launches">
+                  <input id="s-admin-ui-enforce-max-models" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <p id="admin-ui-eviction-hint" class="hint-text">When off, admin UI launches can go beyond the cap after a confirmation prompt instead of evicting an existing model.</p>
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-allow-ollama-override-admin">Allow Ollama API to evict admin-launched models</label>
+                <label class="toggle-switch" for="s-allow-ollama-override-admin"
+                  aria-label="Allow Ollama API to evict admin-launched models">
+                  <input id="s-allow-ollama-override-admin" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <p class="hint-text">When off (default), the API cannot load models if admin-launched models fill the cap. When on, the API may evict admin-launched models using LRU.</p>
             </div>
           </div>
 

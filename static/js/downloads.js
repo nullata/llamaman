@@ -187,6 +187,14 @@ function updateDownloadItem(item, dl) {
     actions.appendChild(useBtn);
   }
 
+  if (dl.status === 'failed') {
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn-xs btn-dl-retry';
+    retryBtn.dataset.id = dl.id;
+    retryBtn.innerHTML = '<i class="fa-solid fa-rotate-right"></i> Retry';
+    actions.appendChild(retryBtn);
+  }
+
   if (['failed', 'cancelled', 'completed'].includes(dl.status)) {
     const removeBtn = document.createElement('button');
     removeBtn.className = 'btn-xs danger btn-dl-remove';
@@ -219,11 +227,15 @@ function renderDownloads() {
   const existingItems = new Map(
     [...panel.querySelectorAll('.dl-item')].map(item => [item.dataset.id, item]),
   );
+  let insertBeforeNode = panel.querySelector('.dl-item');
 
   all.forEach(dl => {
     const item = existingItems.get(String(dl.id)) || createDownloadItem(dl);
     updateDownloadItem(item, dl);
-    panel.appendChild(item);
+    if (item !== insertBeforeNode) {
+      panel.insertBefore(item, insertBeforeNode || null);
+    }
+    insertBeforeNode = item.nextElementSibling;
     existingItems.delete(String(dl.id));
   });
 
@@ -241,6 +253,9 @@ function renderDownloads() {
   });
   panel.querySelectorAll('.btn-dl-resume').forEach(btn => {
     btn.addEventListener('click', () => resumeDownload(btn.dataset.id));
+  });
+  panel.querySelectorAll('.btn-dl-retry').forEach(btn => {
+    btn.addEventListener('click', () => retryDownload(btn.dataset.id));
   });
   panel.querySelectorAll('.btn-dl-remove').forEach(btn => {
     btn.addEventListener('click', () => removeDownload(btn.dataset.id));
@@ -301,6 +316,21 @@ async function resumeDownload(id) {
     } else {
       const data = await res.json();
       toast(`Failed to resume: ${data.error}`, 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function retryDownload(id) {
+  try {
+    const res = await apiFetch(`/api/downloads/${id}/retry`, { method: 'POST' });
+    if (res.ok) {
+      toast('Download retry started', 'success');
+      await pollDownloads();
+    } else {
+      const data = await res.json();
+      toast(`Failed to retry: ${data.error}`, 'error');
     }
   } catch (e) {
     toast('Error: ' + e.message, 'error');

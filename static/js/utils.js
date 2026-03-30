@@ -162,6 +162,18 @@ async function apiFetch(url, opts) {
   return res;
 }
 
+async function readApiResponse(res) {
+  if (!res) return {};
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return await res.json();
+  }
+  const text = await res.text();
+  return {
+    error: text ? text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() : 'Unexpected server response',
+  };
+}
+
 // Encode a file path for use in a URL - encodes each segment but keeps slashes.
 function encodePathForUrl(p) {
   return p.split('/').map(encodeURIComponent).join('/');

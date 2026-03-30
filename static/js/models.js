@@ -180,15 +180,17 @@ async function selectModel(model, el) {
   el.classList.add('selected');
   selectedModelPath = model.path;
   document.getElementById('f-model-path').value = model.path;
+  const ctxField = document.getElementById('f-ctx-size');
   if (typeof setActiveTab === 'function') setActiveTab('settings', 'launch');
   updatePortSuggestion();
+  if (ctxField) ctxField.value = '';
   // Load preset if one exists
   try {
     const res = await apiFetch(`/api/presets${encodePathForUrl(model.path)}`);
     if (res.ok) {
       const p = await res.json();
       if (p.n_gpu_layers != null) document.getElementById('f-gpu-layers').value = p.n_gpu_layers;
-      if (p.ctx_size != null) document.getElementById('f-ctx-size').value = p.ctx_size;
+      if (p.ctx_size != null && ctxField) ctxField.value = p.ctx_size;
       document.getElementById('f-threads').value = p.threads || '';
       document.getElementById('f-parallel').value = p.parallel || '';
       document.getElementById('f-extra').value = p.extra_args || '';

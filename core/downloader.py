@@ -55,7 +55,7 @@ def _effective_limit() -> int:
         return g
     if g == 0:
         return per_model_limit
-    return speed_limit  # settings.json unreadable → launch-time fallback
+    return speed_limit  # settings.json unreadable >> launch-time fallback
 
 
 def _headers():

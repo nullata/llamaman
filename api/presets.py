@@ -37,9 +37,18 @@ def api_preset_get(model_path):
 def api_preset_save(model_path):
     model_path = _normalize_model_path(model_path)
     body = request.get_json(force=True)
+    ctx_size = body.get("ctx_size")
+    if ctx_size in (None, ""):
+        return jsonify({"error": "ctx_size is required"}), 400
+    try:
+        ctx_size = int(ctx_size)
+    except (TypeError, ValueError):
+        return jsonify({"error": "ctx_size must be an integer"}), 400
+    if ctx_size <= 0:
+        return jsonify({"error": "ctx_size must be greater than 0"}), 400
     data = {
         "n_gpu_layers": body.get("n_gpu_layers", -1),
-        "ctx_size": body.get("ctx_size", 4096),
+        "ctx_size": ctx_size,
         "threads": body.get("threads"),
         "parallel": body.get("parallel"),
         "extra_args": body.get("extra_args", ""),
