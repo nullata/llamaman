@@ -26,7 +26,7 @@ class LlamamanEvictionTests(unittest.TestCase):
         storage.get_preset.return_value = {"embedding_model": True}
 
         with patch("api.llamaman.get_storage", return_value=storage), \
-             patch("api.llamaman._evict_llamaman_instances_if_needed") as evict_mock, \
+             patch("api.llamaman._evict_llamaman_instances_if_needed", return_value=True) as evict_mock, \
              patch("api.instances.launch_instance", return_value=({"id": "inst-embed"}, None)) as launch_mock, \
              patch.dict("api.llamaman.instances", {}, clear=True):
             inst, err = llamaman._ensure_model_running("embed")
@@ -52,7 +52,7 @@ class LlamamanEvictionTests(unittest.TestCase):
         storage.get_preset.return_value = {"embedding_model": False}
 
         with patch("api.llamaman.get_storage", return_value=storage), \
-             patch("api.llamaman._evict_llamaman_instances_if_needed") as evict_mock, \
+             patch("api.llamaman._evict_llamaman_instances_if_needed", return_value=True) as evict_mock, \
              patch("api.instances.launch_instance", return_value=({"id": "inst-chat"}, None)) as launch_mock, \
              patch.dict("api.llamaman.instances", {}, clear=True):
             inst, err = llamaman._ensure_model_running("chat")
