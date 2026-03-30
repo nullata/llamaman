@@ -182,12 +182,19 @@ def _wait_for_model_ready(port: int, timeout: float) -> bool:
     return wait_for_healthy(port, timeout=timeout)
 
 
-def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
+def _ensure_model_running(
+    model_name: str,
+    allow_eviction: bool = True,
+) -> tuple[dict | None, str | None]:
     """Ensure a model instance exists and is at least launched.
 
     Returns the instance as soon as it is launched (status may still be
     ``"starting"``).  Callers are expected to use ``_wait_for_model_ready``
     on the server port before forwarding the actual request.
+
+    allow_eviction controls whether LRU eviction may be used to free a slot.
+    The Ollama API sets this True; the OpenAI API sets it False so it never
+    displaces a running model — it either finds a free slot or returns 503.
     """
     from api.instances import (
         launch_instance, relaunch_inactive_instance, wait_for_healthy,
@@ -220,17 +227,25 @@ def _ensure_model_running(model_name: str) -> tuple[dict | None, str | None]:
         preset = get_storage().get_preset(model["path"]) or {}
         incoming_embedding_model = preset.get("embedding_model", False)
 
-        # Always evict before launching or relaunching so we stay within
-        # LLAMAMAN_MAX_MODELS.  Sleeping/stopped instances that get evicted
-        # (sleeping >> stopped) are still valid relaunch targets.
-        room = _evict_llamaman_instances_if_needed(
-            incoming_embedding_model=incoming_embedding_model,
-        )
-        if not room:
-            return None, (
-                f"model limit reached (LLAMAMAN_MAX_MODELS={LLAMAMAN_MAX_MODELS}); "
-                "admin-launched models cannot be evicted via the API"
+        if allow_eviction:
+            # Evict LRU Ollama-managed instances (and admin-UI ones if the
+            # override toggle is on) to stay within LLAMAMAN_MAX_MODELS.
+            room = _evict_llamaman_instances_if_needed(
+                incoming_embedding_model=incoming_embedding_model,
             )
+            if not room:
+                return None, (
+                    f"model limit reached (LLAMAMAN_MAX_MODELS={LLAMAMAN_MAX_MODELS}); "
+                    "admin-launched models cannot be evicted via the API"
+                )
+        else:
+            # OpenAI API: never evict — only proceed if there is already room.
+            if not incoming_embedding_model and LLAMAMAN_MAX_MODELS > 0:
+                if _count_running_instances() >= LLAMAMAN_MAX_MODELS:
+                    return None, (
+                        f"model limit reached (LLAMAMAN_MAX_MODELS={LLAMAMAN_MAX_MODELS}); "
+                        "the OpenAI API does not evict running models"
+                    )
 
         if existing and existing["status"] in ("sleeping", "stopped"):
             # relaunch_inactive_instance blocks until healthy; if it
@@ -640,7 +655,8 @@ def _handle_request(mode: str = "chat"):
 
     inst, err = _ensure_model_running(model_name)
     if err:
-        return jsonify({"error": err}), 500
+        code = 503 if "model limit reached" in err else 500
+        return jsonify({"error": err}), code
 
     server_port = inst.get("_internal_port") or inst["port"]
 
@@ -770,9 +786,9 @@ def llamaman_v1_chat():
     if not model_name:
         return jsonify({"error": {"message": "model is required"}}), 400
 
-    inst, err = _ensure_model_running(model_name)
+    inst, err = _ensure_model_running(model_name, allow_eviction=False)
     if err:
-        return jsonify({"error": {"message": err}}), 500
+        return jsonify({"error": {"message": err}}), 503
 
     server_port = inst.get("_internal_port") or inst["port"]
     inst_id = inst["id"]

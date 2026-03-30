@@ -100,7 +100,7 @@
               aria-controls="settings-tab-cleanup" aria-selected="false" tabindex="-1" data-tab="cleanup">Cleanup
               Settings</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-appsettings"
-              aria-controls="settings-tab-appsettings" aria-selected="false" tabindex="-1" data-tab="appsettings">Application</button>
+              aria-controls="settings-tab-appsettings" aria-selected="false" tabindex="-1" data-tab="appsettings">LRU</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-downloads"
               aria-controls="settings-tab-downloads" aria-selected="false" tabindex="-1" data-tab="downloads">Downloads</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-huggingface"
@@ -249,9 +249,9 @@
               </div>
               <p id="admin-ui-eviction-hint" class="hint-text">When off, admin UI launches can go beyond the cap after a confirmation prompt instead of evicting an existing model.</p>
               <div class="form-group cleanup-toggle-grid">
-                <label for="s-allow-ollama-override-admin">Allow Ollama/OpenAI API to evict admin-launched models</label>
+                <label for="s-allow-ollama-override-admin">Allow Ollama API to evict admin-launched models</label>
                 <label class="toggle-switch" for="s-allow-ollama-override-admin"
-                  aria-label="Allow Ollama/OpenAI API to evict admin-launched models">
+                  aria-label="Allow Ollama API to evict admin-launched models">
                   <input id="s-allow-ollama-override-admin" type="checkbox" />
                   <span class="toggle-slider"></span>
                 </label>

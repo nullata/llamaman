@@ -172,7 +172,7 @@ open-webui:
 2. User selects a model in OpenWebUI -> `/api/chat` request arrives
 3. LlamaMan auto-launches a llama-server (using saved preset or defaults)
 4. Waits for healthy, then proxies the request with format translation
-5. When `LLAMAMAN_MAX_MODELS` limit is reached, the least-recently-used **Ollama-managed** model is evicted. Admin UI launched models are protected from API eviction by default (see [Model eviction policy](#model-eviction-policy))
+5. When `LLAMAMAN_MAX_MODELS` limit is reached, the least-recently-used **Ollama-managed** model is evicted. Admin UI launched models are never evicted by the Ollama API by default (see [Model eviction policy](#model-eviction-policy))
 
 Supported Ollama endpoints: `/api/tags`, `/api/chat`, `/api/generate`, `/api/show`, `/api/version`, `/api/ps`
 
@@ -184,24 +184,26 @@ The `LLAMAMAN_MAX_MODELS` limit controls how many **chat** models the proxy will
 
 #### Priority rules
 
-Admin UI launched models have ultimate priority. The Ollama/OpenAI API can only evict models it launched itself:
+Admin UI launched models have ultimate priority. The two API surfaces have different eviction rights:
 
-| Launcher | Can evict | Cannot evict (default) |
-|----------|-----------|------------------------|
-| **Admin UI** | Any model (Ollama-managed first, then admin UI by LRU) | - |
-| **Ollama/OpenAI API** | Ollama-managed models (LRU) | Admin UI launched models |
+| Launcher | Eviction behaviour | Cannot evict |
+|----------|--------------------|--------------|
+| **Admin UI** | Evicts Ollama-managed models first (LRU), then admin UI models if needed | - |
+| **Ollama API** (`/api/chat`, `/api/generate`) | Evicts Ollama-managed models (LRU) | Admin UI launched models (by default) |
+| **OpenAI API** (`/v1/chat/completions`) | No eviction - starts model only if a slot is free | Everything |
 
-If the cap is full and all running instances were launched from the admin UI, API requests for a new model will fail with HTTP 503:
+If the cap is full, requests that cannot evict return HTTP 503:
 ```
 model limit reached (LLAMAMAN_MAX_MODELS=N); admin-launched models cannot be evicted via the API
+model limit reached (LLAMAMAN_MAX_MODELS=N); the OpenAI API does not evict running models
 ```
 
 #### App Settings toggles
 
-Two toggles in **Settings >> App Settings** control eviction behavior:
+Two toggles in **Settings >> App Settings** control eviction behaviour:
 
 - **Enforce `LLAMAMAN_MAX_MODELS` for admin UI launches** - when on, the admin UI silently evicts the LRU model (Ollama-managed first) before launching. When off (default), the UI prompts you to confirm before exceeding the cap.
-- **Allow Ollama/OpenAI API to evict admin-launched models** - when on, the API can also evict admin UI launched models as a fallback if no Ollama-managed models are available to evict. Off by default.
+- **Allow Ollama API to evict admin-launched models** - when on, the Ollama API can also evict admin UI launched models as a fallback if no Ollama-managed models are available to evict. Off by default. Has no effect on the OpenAI API, which never evicts.
 
 #### Other details
 
