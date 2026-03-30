@@ -227,11 +227,15 @@ function renderDownloads() {
   const existingItems = new Map(
     [...panel.querySelectorAll('.dl-item')].map(item => [item.dataset.id, item]),
   );
+  let insertBeforeNode = panel.querySelector('.dl-item');
 
   all.forEach(dl => {
     const item = existingItems.get(String(dl.id)) || createDownloadItem(dl);
     updateDownloadItem(item, dl);
-    panel.appendChild(item);
+    if (item !== insertBeforeNode) {
+      panel.insertBefore(item, insertBeforeNode || null);
+    }
+    insertBeforeNode = item.nextElementSibling;
     existingItems.delete(String(dl.id));
   });
 
