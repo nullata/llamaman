@@ -613,7 +613,7 @@ select option {
 }
 
 .gpu-bar-label {
-  flex: 0 0 84px;
+  min-width: 60px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -636,7 +636,33 @@ select option {
 }
 
 .gpu-bar-text {
-  flex: 0 0 160px;
+  min-width: 100px;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.gpu-bar-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gpu-bar-subrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gpu-bar-subrow-label {
+  font-size: 0.75em;
+  width: 3em;
+  color: var(--muted);
+}
+
+.gpu-bar-subtext {
+  width: 3.5em;
   text-align: right;
   color: var(--text);
   font-variant-numeric: tabular-nums;
