@@ -87,12 +87,20 @@ function calcMaxGpuLayers(meta, gpuFreeMb, ctxSize) {
 async function updateGpuLayersSuggestion() {
   const el = document.getElementById('gpu-layers-suggestion');
   if (!el) return;
-  if (!currentModelMeta || !currentModelMeta.block_count) { el.textContent = ''; return; }
+  if (!currentModelMeta || !currentModelMeta.block_count) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   const ctxSize = parseInt(document.getElementById('f-ctx-size').value) || 4096;
   const gpuDevicesRaw = (document.getElementById('f-gpu-devices').value || '').trim();
   const gpus = await fetchGpuInfoCached();
-  if (!gpus.length) { el.textContent = ''; return; }
+  if (!gpus.length) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   // Determine which GPUs are active
   let activeGpus;
@@ -102,12 +110,20 @@ async function updateGpuLayersSuggestion() {
   } else {
     activeGpus = gpus;
   }
-  if (!activeGpus.length) { el.textContent = ''; return; }
+  if (!activeGpus.length) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   // For multi-GPU: llama.cpp distributes layers, so sum free VRAM
   const totalFreeMb = activeGpus.reduce((s, g) => s + g.memory_free_mb, 0);
   const maxLayers = calcMaxGpuLayers(currentModelMeta, totalFreeMb, ctxSize);
-  if (maxLayers === null) { el.textContent = ''; return; }
+  if (maxLayers === null) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   const freeGb = (totalFreeMb / 1024).toFixed(1);
   const allFit = maxLayers >= currentModelMeta.block_count;
@@ -116,7 +132,7 @@ async function updateGpuLayersSuggestion() {
     : `${activeGpus.length} GPUs`;
 
   el.textContent = `Suggested ≤${maxLayers} layers (${gpuLabel}, ${freeGb} GB free)${allFit ? ' - full offload fits' : ''}`;
-  el.style.color = allFit ? 'var(--green)' : '';
+  el.classList.toggle('text-success', allFit);
 }
 
 function scheduleSuggestionUpdate() {
@@ -200,6 +216,12 @@ async function selectModel(model, el) {
       document.getElementById('f-max-queue-depth').value = p.max_queue_depth || 200;
       document.getElementById('f-share-queue').checked = !!p.share_queue;
       document.getElementById('f-embedding-model').checked = !!p.embedding_model;
+      document.getElementById('f-proxy-sampling-override-enabled').checked = !!p.proxy_sampling_override_enabled;
+      document.getElementById('f-proxy-sampling-temperature').value = p.proxy_sampling_temperature ?? 0.8;
+      document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
+      document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
+      document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
+      if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
       toast('Preset loaded', 'info');
     }
   } catch (e) { /* no preset, use defaults */ }
@@ -234,7 +256,10 @@ async function updateGpuLayersTotal(modelPath) {
   const suggEl = document.getElementById('gpu-layers-suggestion');
   label.textContent = '';
   currentModelMeta = null;
-  if (suggEl) suggEl.textContent = '';
+  if (suggEl) {
+    suggEl.textContent = '';
+    suggEl.classList.remove('text-success');
+  }
   if (!modelPath || !modelPath.toLowerCase().endsWith('.gguf')) return;
   try {
     const res = await apiFetch(`/api/model-layers?path=${encodeURIComponent(modelPath)}`);

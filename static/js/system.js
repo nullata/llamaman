@@ -3,6 +3,7 @@
 // -------------------------------------------------------------------------
 // System info (CPU & RAM)
 // -------------------------------------------------------------------------
+
 async function loadSystemInfo() {
   try {
     const card = document.getElementById('system-info-card');
@@ -11,7 +12,6 @@ async function loadSystemInfo() {
     const res = await apiFetch('/api/system-info');
     const d = await res.json();
     if (d.error) return;
-    card.style.display = '';
 
     const coresLabel = document.getElementById('system-cores');
     coresLabel.textContent = `${d.cpu_cores} cores`;
@@ -62,7 +62,7 @@ async function loadGpuInfo() {
       return;
     }
 
-    card.style.display = '';
+    hideGpuWarning();
     container.innerHTML = '';
 
     data.gpus.forEach(gpu => {
@@ -100,7 +100,13 @@ async function loadGpuInfo() {
   }
 }
 function showGpuWarning() {
-  document.getElementById('gpu-warning').style.display = 'block';
+  const warning = document.getElementById('gpu-warning');
+  if (warning) warning.hidden = false;
+}
+
+function hideGpuWarning() {
+  const warning = document.getElementById('gpu-warning');
+  if (warning) warning.hidden = true;
 }
 
 // -------------------------------------------------------------------------
@@ -128,6 +134,13 @@ async function loadSettings() {
 
     const speedLimit = document.getElementById('s-global-speed-limit');
     if (speedLimit) speedLimit.value = s.global_speed_limit_mbps ?? 0;
+    const autoRetryFailedDownloads = document.getElementById('s-auto-retry-failed-downloads');
+    if (autoRetryFailedDownloads) autoRetryFailedDownloads.checked = !!s.auto_retry_failed_downloads;
+    const retryCountPerFailedDownload = document.getElementById('s-retry-count-per-failed-download');
+    if (retryCountPerFailedDownload) {
+      retryCountPerFailedDownload.value = s.retry_count_per_failed_download ?? 3;
+      updateDownloadRetryCountState();
+    }
 
     const adminUiEvictionToggle = document.getElementById('s-admin-ui-enforce-max-models');
     if (adminUiEvictionToggle) {
@@ -264,6 +277,63 @@ async function saveAppSettings() {
   }
 }
 
+function buildModelsExportFilename() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+  ].join('') + '-' + [
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join('');
+  return `llamaman-models-${stamp}.json`;
+}
+
+async function downloadStoredModelsJson() {
+  const button = document.getElementById('btn-download-models-json');
+  if (!button) return;
+
+  const originalHtml = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Preparing...';
+
+  try {
+    const [modelsRes, presetsRes] = await Promise.all([
+      apiFetch('/api/models'),
+      apiFetch('/api/presets'),
+    ]);
+    const models = await readApiResponse(modelsRes);
+    if (!modelsRes || !modelsRes.ok) {
+      throw new Error(models.error || 'Unable to load models');
+    }
+    const presets = presetsRes && presetsRes.ok ? await presetsRes.json() : {};
+
+    const exported = models.map(({ path, size_bytes, size_display, ...rest }) => {
+      const preset = presets[path];
+      return preset ? { ...rest, preset } : rest;
+    });
+
+    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = buildModelsExportFilename();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${exported.length} stored models`, 'info');
+  } catch (e) {
+    toast('Error downloading stored models JSON: ' + e.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.innerHTML = originalHtml;
+  }
+}
+
 const requireAuthToggle = document.getElementById('s-require-auth');
 if (requireAuthToggle) {
   requireAuthToggle.addEventListener('change', saveRequireAuth);
@@ -277,6 +347,11 @@ if (adminUiEvictionToggle) {
 const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
 if (ollamaOverrideToggle) {
   ollamaOverrideToggle.addEventListener('change', saveAppSettings);
+}
+
+const downloadModelsJsonBtn = document.getElementById('btn-download-models-json');
+if (downloadModelsJsonBtn) {
+  downloadModelsJsonBtn.addEventListener('click', downloadStoredModelsJson);
 }
 
 const saveSettingsBtn = document.getElementById('btn-save-settings');
@@ -324,7 +399,7 @@ async function loadHuggingFaceTokens() {
   if (!list) return;
 
   if (huggingFaceTokens.length === 0) {
-    list.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px;">No Hugging Face tokens saved.</div>';
+    list.innerHTML = '<div class="list-empty-state">No Hugging Face tokens saved.</div>';
     return;
   }
 
@@ -338,8 +413,8 @@ async function loadHuggingFaceTokens() {
     item.innerHTML = `
       <div class="dl-item-top">
         <span class="dl-item-name"><strong>${escHtml(token.name)}</strong></span>
-        <code style="font-size:11px;color:var(--muted);">${escHtml(token.preview)}</code>
-        <span style="font-size:11px;color:var(--muted);">${escHtml(created)}</span>
+        <code class="list-meta-code">${escHtml(token.preview)}</code>
+        <span class="list-meta-date">${escHtml(created)}</span>
         <button class="btn-xs danger btn-hf-token-delete" data-id="${token.id}"><i class="fa-solid fa-trash"></i> Delete</button>
       </div>
     `;
@@ -413,7 +488,7 @@ async function loadApiKeys() {
     const res = await apiFetch('/api/api-keys');
     const keys = await res.json();
     if (keys.length === 0) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px;">No API keys yet. API is open to all requests.</div>';
+      list.innerHTML = '<div class="list-empty-state">No API keys yet. API is open to all requests.</div>';
       return;
     }
     list.innerHTML = '';
@@ -424,8 +499,8 @@ async function loadApiKeys() {
       item.innerHTML = `
         <div class="dl-item-top">
           <span class="dl-item-name"><strong>${escHtml(k.name)}</strong></span>
-          <code style="font-size:11px;color:var(--muted);">${escHtml(k.prefix)}</code>
-          <span style="font-size:11px;color:var(--muted);">${date}</span>
+          <code class="list-meta-code">${escHtml(k.prefix)}</code>
+          <span class="list-meta-date">${date}</span>
           <button class="btn-xs danger btn-ak-delete" data-id="${k.id}"><i class="fa-solid fa-trash"></i> Revoke</button>
         </div>
       `;
@@ -487,8 +562,8 @@ if (btnCopyKey) btnCopyKey.addEventListener('click', () => {
   const onCopied = () => {
     if (icon) {
       icon.className = 'fa-solid fa-check';
-      icon.style.color = 'var(--green)';
-      setTimeout(() => { icon.className = 'fa-solid fa-copy'; icon.style.color = ''; }, 2000);
+      icon.classList.add('icon-copy-success');
+      setTimeout(() => { icon.className = 'fa-solid fa-copy'; }, 2000);
     }
   };
 
@@ -496,9 +571,8 @@ if (btnCopyKey) btnCopyKey.addEventListener('click', () => {
     navigator.clipboard.writeText(key).then(onCopied);
   } else {
     const ta = document.createElement('textarea');
+    ta.className = 'clipboard-copy-buffer';
     ta.value = key;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
     document.execCommand('copy');
@@ -517,13 +591,29 @@ if (apiKeyModal) apiKeyModal.addEventListener('click', (e) => {
 // -------------------------------------------------------------------------
 // Download Settings (global speed limit)
 // -------------------------------------------------------------------------
+function updateDownloadRetryCountState() {
+  const toggle = document.getElementById('s-auto-retry-failed-downloads');
+  const input = document.getElementById('s-retry-count-per-failed-download');
+  if (!toggle || !input) return;
+  input.disabled = !toggle.checked;
+}
+
 async function saveDownloadSettings() {
   const limitMbps = parseFloat(document.getElementById('s-global-speed-limit').value) || 0;
+  const autoRetryFailedDownloads = !!document.getElementById('s-auto-retry-failed-downloads')?.checked;
+  const retryCountPerFailedDownload = Math.max(
+    1,
+    parseInt(document.getElementById('s-retry-count-per-failed-download').value, 10) || 3,
+  );
   try {
     const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ global_speed_limit_mbps: limitMbps }),
+      body: JSON.stringify({
+        global_speed_limit_mbps: limitMbps,
+        auto_retry_failed_downloads: autoRetryFailedDownloads,
+        retry_count_per_failed_download: retryCountPerFailedDownload,
+      }),
     });
     if (res && res.ok) {
       const status = document.getElementById('download-settings-status');
@@ -537,3 +627,8 @@ async function saveDownloadSettings() {
 
 const btnSaveDownloadSettings = document.getElementById('btn-save-download-settings');
 if (btnSaveDownloadSettings) btnSaveDownloadSettings.addEventListener('click', saveDownloadSettings);
+const autoRetryFailedDownloadsToggle = document.getElementById('s-auto-retry-failed-downloads');
+if (autoRetryFailedDownloadsToggle) {
+  autoRetryFailedDownloadsToggle.addEventListener('change', updateDownloadRetryCountState);
+  updateDownloadRetryCountState();
+}

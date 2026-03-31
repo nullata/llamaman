@@ -24,6 +24,7 @@ from core.helpers import (
     build_llama_cmd, find_available_port, is_port_available, kill_instance_process,
     public_dict, read_log_file, stream_log_file,
 )
+from core.proxy_sampling import parse_proxy_sampling_config
 from core.state import (
     instances, instances_lock, save_state,
 )
@@ -75,6 +76,11 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             "max_queue_depth",
             "share_queue",
             "embedding_model",
+            "proxy_sampling_override_enabled",
+            "proxy_sampling_temperature",
+            "proxy_sampling_top_k",
+            "proxy_sampling_top_p",
+            "proxy_sampling_presence_penalty",
         ):
             if key in preset:
                 merged[key] = preset[key]
@@ -274,13 +280,18 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
                     threads=None, parallel=None, extra_args="",
                     gpu_devices=None, idle_timeout_min=0,
                     max_concurrent=0, max_queue_depth=200,
-                    share_queue=False, embedding_model=False):
+                    share_queue=False, embedding_model=False,
+                    proxy_sampling_override_enabled=False,
+                    proxy_sampling_temperature=0.8,
+                    proxy_sampling_top_k=40,
+                    proxy_sampling_top_p=0.95,
+                    proxy_sampling_presence_penalty=0.0):
     with instances_lock:
         used_ports = {i["port"] for i in instances.values() if i["status"] not in ("stopped",)}
     if port in used_ports:
         return None, f"Port {port} is already in use"
 
-    needs_proxy = idle_timeout_min > 0 or max_concurrent > 0
+    needs_proxy = idle_timeout_min > 0 or max_concurrent > 0 or proxy_sampling_override_enabled
     if needs_proxy:
         internal_port = find_available_port(
             exclude={port},
@@ -306,6 +317,11 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "max_queue_depth": max_queue_depth,
         "share_queue": share_queue,
         "embedding_model": embedding_model,
+        "proxy_sampling_override_enabled": proxy_sampling_override_enabled,
+        "proxy_sampling_temperature": proxy_sampling_temperature,
+        "proxy_sampling_top_k": proxy_sampling_top_k,
+        "proxy_sampling_top_p": proxy_sampling_top_p,
+        "proxy_sampling_presence_penalty": proxy_sampling_presence_penalty,
     }
 
     inst_id = str(uuid.uuid4())
@@ -455,6 +471,9 @@ def api_instances_create():
     ctx_size, ctx_err = _parse_required_positive_int(body, "ctx_size")
     if ctx_err:
         return jsonify({"error": ctx_err}), 400
+    proxy_sampling_config, proxy_sampling_err = parse_proxy_sampling_config(body)
+    if proxy_sampling_err:
+        return jsonify({"error": proxy_sampling_err}), 400
 
     incoming_embedding_model = bool(body.get("embedding_model", False))
     confirm_overcommit = bool(body.get("confirm_overcommit", False))
@@ -482,6 +501,7 @@ def api_instances_create():
         max_queue_depth=int(body.get("max_queue_depth", 200)),
         share_queue=bool(body.get("share_queue", False)),
         embedding_model=bool(body.get("embedding_model", False)),
+        **proxy_sampling_config,
     )
     if err:
         code = 409 if "already in use" in err else 500
@@ -562,6 +582,11 @@ def api_instances_restart(inst_id):
         max_queue_depth=config.get("max_queue_depth", 200),
         share_queue=config.get("share_queue", False),
         embedding_model=config.get("embedding_model", False),
+        proxy_sampling_override_enabled=bool(config.get("proxy_sampling_override_enabled", False)),
+        proxy_sampling_temperature=float(config.get("proxy_sampling_temperature", 0.8)),
+        proxy_sampling_top_k=int(config.get("proxy_sampling_top_k", 40)),
+        proxy_sampling_top_p=float(config.get("proxy_sampling_top_p", 0.95)),
+        proxy_sampling_presence_penalty=float(config.get("proxy_sampling_presence_penalty", 0.0)),
     )
     if err:
         _restore_restarted_instance(old)

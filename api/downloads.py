@@ -13,6 +13,7 @@ from flask import Blueprint, Response, jsonify, request
 from api.settings import get_hf_token_secret
 from config import DATA_DIR, LOGS_DIR, MODELS_DIR, logger
 from core.helpers import cleanup_download_dir, kill_instance_process, public_dict, read_log_file, stream_log_file
+from core.model_sources import record_model_source
 from core.state import downloads, downloads_lock, save_state
 from storage import get_storage
 
@@ -77,6 +78,37 @@ def _restart_existing_download(dl: dict):
         return None, None, None, str(e)
 
 
+def _activate_download_process(dl: dict, proc, log_fh, log_file: str, *, reset_started_at: bool) -> None:
+    dl["status"] = "downloading"
+    dl["pid"] = proc.pid
+    dl["log_file"] = log_file
+    dl["_process"] = proc
+    dl["_log_fh"] = log_fh
+    if reset_started_at:
+        dl["started_at"] = time.time()
+
+
+def restart_download_in_place(
+    dl: dict,
+    *,
+    reset_started_at: bool,
+    reset_retry_attempts: bool = False,
+    increment_retry_attempts: bool = False,
+) -> str | None:
+    proc, log_fh, log_file, err = _restart_existing_download(dl)
+    if err:
+        return err
+
+    _activate_download_process(dl, proc, log_fh, log_file, reset_started_at=reset_started_at)
+
+    if reset_retry_attempts:
+        dl["retry_attempts"] = 0
+    elif increment_retry_attempts:
+        dl["retry_attempts"] = int(dl.get("retry_attempts", 0) or 0) + 1
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -109,6 +141,7 @@ def api_downloads_create():
         dest_name = Path(filename).stem
     dest_path = os.path.join(MODELS_DIR, dest_name)
     os.makedirs(dest_path, exist_ok=True)
+    model_path = os.path.join(dest_path, filename) if filename else dest_path
 
     dl_id = str(uuid.uuid4())
 
@@ -131,12 +164,15 @@ def api_downloads_create():
         "_hf_token": token,
         "_hf_token_id": token_id,
         "per_model_speed_limit_mbps": per_model_mbps,
+        "retry_attempts": 0,
         "_process": proc,
         "_log_fh": log_fh,
     }
 
     with downloads_lock:
         downloads[dl_id] = dl
+
+    record_model_source(dest_path, repo_id, model_path=model_path)
 
     logger.info("Download started: %s -> %s (pid %d)", repo_id, dest_path, proc.pid)
     save_state()
@@ -198,11 +234,7 @@ def api_downloads_resume(dl_id):
             code = 409 if "token" in err.lower() else 500
             return jsonify({"error": err}), code
 
-        dl["status"] = "downloading"
-        dl["pid"] = proc.pid
-        dl["log_file"] = log_file
-        dl["_process"] = proc
-        dl["_log_fh"] = log_fh
+        _activate_download_process(dl, proc, log_fh, log_file, reset_started_at=False)
 
     save_state()
     logger.info("Download resumed: %s (pid %d)", dl_id, proc.pid)
@@ -218,20 +250,17 @@ def api_downloads_retry(dl_id):
         if dl["status"] != "failed":
             return jsonify({"error": "Only failed downloads can be retried"}), 409
 
-        proc, log_fh, log_file, err = _restart_existing_download(dl)
+        err = restart_download_in_place(
+            dl,
+            reset_started_at=True,
+            reset_retry_attempts=True,
+        )
         if err:
             code = 409 if "token" in err.lower() else 500
             return jsonify({"error": err}), code
 
-        dl["status"] = "downloading"
-        dl["pid"] = proc.pid
-        dl["log_file"] = log_file
-        dl["_process"] = proc
-        dl["_log_fh"] = log_fh
-        dl["started_at"] = time.time()
-
     save_state()
-    logger.info("Download retried: %s (pid %d)", dl_id, proc.pid)
+    logger.info("Download retried: %s (pid %d)", dl_id, dl["pid"])
     return jsonify(public_dict(dl))
 
 

@@ -209,3 +209,19 @@ async function nextAvailablePort() {
 function escHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+function clampPercent(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function renderMeterSvg({ meterClass = '', toneClass = '', percent = 0, meterHeight = 14, cornerRadius = 3 } = {}) {
+  const classes = ['meter-svg', meterClass, toneClass].filter(Boolean).join(' ');
+  const clampedPercent = clampPercent(percent);
+  return `
+    <svg class="${classes}" viewBox="0 0 100 ${meterHeight}" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <rect class="meter-track" x="0" y="0" width="100" height="${meterHeight}" rx="${cornerRadius}" ry="${cornerRadius}"></rect>
+      <rect class="meter-fill" x="0" y="0" width="${clampedPercent}" height="${meterHeight}" rx="${cornerRadius}" ry="${cornerRadius}"></rect>
+    </svg>
+  `;
+}

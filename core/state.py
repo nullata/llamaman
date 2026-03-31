@@ -71,6 +71,7 @@ def save_state():
                     "started_at": dl.get("started_at", 0),
                     "hf_token_id": dl.get("_hf_token_id", ""),
                     "per_model_speed_limit_mbps": dl.get("per_model_speed_limit_mbps", 0),
+                    "retry_attempts": dl.get("retry_attempts", 0),
                 })
 
         try:
@@ -119,6 +120,11 @@ def adopt_orphans() -> int:
         orphan_config = {
             **info["config"],
             "embedding_model": preset.get("embedding_model", False),
+            "proxy_sampling_override_enabled": preset.get("proxy_sampling_override_enabled", False),
+            "proxy_sampling_temperature": preset.get("proxy_sampling_temperature", 0.8),
+            "proxy_sampling_top_k": preset.get("proxy_sampling_top_k", 40),
+            "proxy_sampling_top_p": preset.get("proxy_sampling_top_p", 0.95),
+            "proxy_sampling_presence_penalty": preset.get("proxy_sampling_presence_penalty", 0.0),
         }
 
         inst_id = str(uuid.uuid4())
@@ -188,7 +194,11 @@ def load_state():
         internal_port = entry.get("internal_port")
         saved_status = entry.get("status", "stopped")
         saved_pid = entry.get("pid", 0)
-        has_proxy = internal_port and (idle_timeout > 0 or max_concurrent > 0)
+        has_proxy = internal_port and (
+            idle_timeout > 0
+            or max_concurrent > 0
+            or config.get("proxy_sampling_override_enabled", False)
+        )
 
         # Determine restored status based on what was saved and whether
         # the process is still alive.
@@ -265,6 +275,7 @@ def load_state():
             "started_at": entry.get("started_at", 0),
             "_hf_token_id": entry.get("hf_token_id", ""),
             "per_model_speed_limit_mbps": entry.get("per_model_speed_limit_mbps", 0),
+            "retry_attempts": entry.get("retry_attempts", 0),
             "_process": None,
             "_log_fh": None,
         }

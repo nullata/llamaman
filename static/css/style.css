@@ -98,7 +98,6 @@ header span {
 }
 
 #gpu-warning {
-  display: none;
   background: #451a03;
   border-bottom: 1px solid #78350f;
   padding: 8px 24px;
@@ -340,6 +339,34 @@ header span {
   max-width: 100%;
 }
 
+.launch-settings-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.launch-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.launch-settings-section-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.launch-inline-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
+  gap: 12px 14px;
+  align-items: end;
+}
+
 .cleanup-toggle-grid {
   display: grid;
   grid-template-columns: max-content 40px;
@@ -362,8 +389,29 @@ header span {
   display: contents;
 }
 
-.cleanup-input-row {
+.cleanup-settings-grid .cleanup-input-row {
+  display: contents;
+}
+
+.cleanup-settings-grid .cleanup-input-row > label {
+  grid-column: 1 / 2;
+  align-self: center;
+}
+
+.cleanup-settings-grid .cleanup-input-row > input {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.cleanup-settings-grid .cleanup-input-row > .hint-text {
   grid-column: 1 / -1;
+}
+
+.cleanup-section-divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0 8px;
 }
 
 .cleanup-last-ran {
@@ -472,6 +520,12 @@ select option {
   filter: brightness(0.9);
 }
 
+.btn:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  filter: none;
+}
+
 .btn-primary {
   background: var(--accent);
   color: #fff;
@@ -535,6 +589,26 @@ select option {
   color: var(--muted);
   font-size: 12px;
   margin-top: 2px;
+}
+
+.inst-meta-accent {
+  color: var(--accent);
+}
+
+.instance-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.instance-queue-label {
+  color: var(--muted);
+}
+
+.instance-queue-text {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .status-badge {
@@ -615,6 +689,71 @@ select option {
   text-align: right;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+
+.gpu-bar-stack {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gpu-bar-subrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gpu-bar-subrow-label {
+  font-size: 0.75em;
+  width: 3em;
+  color: var(--muted);
+}
+
+.gpu-bar-subtext {
+  width: 3.5em;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter-svg {
+  --meter-fill: var(--accent);
+  display: block;
+  width: 100%;
+  overflow: hidden;
+}
+
+.meter-track {
+  fill: var(--surface);
+}
+
+.meter-fill {
+  fill: var(--meter-fill);
+  transition: width .3s;
+}
+
+.gpu-bar-meter {
+  flex: 1;
+  height: 14px;
+}
+
+.instance-queue-meter {
+  flex: 1;
+  max-width: 120px;
+  height: 8px;
+}
+
+.progress-tone-success {
+  --meter-fill: var(--accent);
+}
+
+.progress-tone-warning {
+  --meter-fill: var(--yellow);
+}
+
+.progress-tone-danger {
+  --meter-fill: var(--red);
 }
 
 /* ---- Sidebar Downloads Section ---- */
@@ -1108,9 +1247,28 @@ body.login-page {
   color: var(--yellow);
 }
 
+.text-success {
+  color: var(--green);
+}
+
+.text-danger {
+  color: var(--red);
+}
+
 .form-actions-compact {
   margin-top: 0;
   margin-bottom: 14px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+
+.form-actions-compact .btn {
+  flex-shrink: 0;
+}
+
+.form-actions-compact .input-narrow {
+  flex: 1 1 240px;
+  min-width: 0;
 }
 
 .form-actions-end {
@@ -1119,6 +1277,29 @@ body.login-page {
 
 .input-narrow {
   max-width: 240px;
+}
+
+.download-settings-input {
+  width: 80px;
+}
+
+.cleanup-settings-input {
+  width: 80px;
+}
+
+.launch-settings-input {
+  width: 90px;
+}
+
+.gpu-layers-suggestion {
+  margin-top: 4px;
+  font-size: 0.82em;
+  min-height: 1.1em;
+  text-wrap: wrap;
+}
+
+.cleanup-settings-grid-spaced {
+  margin-bottom: 14px;
 }
 
 .inline-field {
@@ -1174,4 +1355,32 @@ body.login-page {
   font-size: 12px;
   word-break: break-all;
   color: var(--accent);
+}
+
+.icon-copy-success {
+  color: var(--green);
+}
+
+.clipboard-copy-buffer {
+  position: fixed;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.list-empty-state {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 12px;
+}
+
+.list-meta-code,
+.list-meta-date {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.login-logo {
+  height: 22px;
+  width: auto;
 }

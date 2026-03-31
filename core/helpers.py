@@ -208,6 +208,11 @@ def _parse_llama_cmdline(pid: int) -> dict | None:
             "max_queue_depth": 200,
             "share_queue": False,
             "embedding_model": False,
+            "proxy_sampling_override_enabled": False,
+            "proxy_sampling_temperature": 0.8,
+            "proxy_sampling_top_k": 40,
+            "proxy_sampling_top_p": 0.95,
+            "proxy_sampling_presence_penalty": 0.0,
         },
     }
 
