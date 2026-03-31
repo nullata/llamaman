@@ -263,6 +263,54 @@ async function saveAppSettings() {
   }
 }
 
+function buildModelsExportFilename() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, '0');
+  const stamp = [
+    now.getFullYear(),
+    pad(now.getMonth() + 1),
+    pad(now.getDate()),
+  ].join('') + '-' + [
+    pad(now.getHours()),
+    pad(now.getMinutes()),
+    pad(now.getSeconds()),
+  ].join('');
+  return `llamaman-models-${stamp}.json`;
+}
+
+async function downloadStoredModelsJson() {
+  const button = document.getElementById('btn-download-models-json');
+  if (!button) return;
+
+  const originalHtml = button.innerHTML;
+  button.disabled = true;
+  button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Preparing...';
+
+  try {
+    const res = await apiFetch('/api/models');
+    const data = await readApiResponse(res);
+    if (!res || !res.ok) {
+      throw new Error(data.error || 'Unable to load models');
+    }
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = buildModelsExportFilename();
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast(`Downloaded ${Array.isArray(data) ? data.length : 0} stored models`, 'info');
+  } catch (e) {
+    toast('Error downloading stored models JSON: ' + e.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.innerHTML = originalHtml;
+  }
+}
+
 const requireAuthToggle = document.getElementById('s-require-auth');
 if (requireAuthToggle) {
   requireAuthToggle.addEventListener('change', saveRequireAuth);
@@ -276,6 +324,11 @@ if (adminUiEvictionToggle) {
 const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
 if (ollamaOverrideToggle) {
   ollamaOverrideToggle.addEventListener('change', saveAppSettings);
+}
+
+const downloadModelsJsonBtn = document.getElementById('btn-download-models-json');
+if (downloadModelsJsonBtn) {
+  downloadModelsJsonBtn.addEventListener('click', downloadStoredModelsJson);
 }
 
 const saveSettingsBtn = document.getElementById('btn-save-settings');
