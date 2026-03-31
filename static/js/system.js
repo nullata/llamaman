@@ -294,13 +294,22 @@ async function downloadStoredModelsJson() {
   button.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Preparing...';
 
   try {
-    const res = await apiFetch('/api/models');
-    const data = await readApiResponse(res);
-    if (!res || !res.ok) {
-      throw new Error(data.error || 'Unable to load models');
+    const [modelsRes, presetsRes] = await Promise.all([
+      apiFetch('/api/models'),
+      apiFetch('/api/presets'),
+    ]);
+    const models = await readApiResponse(modelsRes);
+    if (!modelsRes || !modelsRes.ok) {
+      throw new Error(models.error || 'Unable to load models');
     }
+    const presets = presetsRes && presetsRes.ok ? await presetsRes.json() : {};
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const exported = models.map(({ path, size_bytes, size_display, ...rest }) => {
+      const preset = presets[path];
+      return preset ? { ...rest, preset } : rest;
+    });
+
+    const blob = new Blob([JSON.stringify(exported, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -309,7 +318,7 @@ async function downloadStoredModelsJson() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-    toast(`Downloaded ${Array.isArray(data) ? data.length : 0} stored models`, 'info');
+    toast(`Downloaded ${exported.length} stored models`, 'info');
   } catch (e) {
     toast('Error downloading stored models JSON: ' + e.message, 'error');
   } finally {
