@@ -87,12 +87,20 @@ function calcMaxGpuLayers(meta, gpuFreeMb, ctxSize) {
 async function updateGpuLayersSuggestion() {
   const el = document.getElementById('gpu-layers-suggestion');
   if (!el) return;
-  if (!currentModelMeta || !currentModelMeta.block_count) { el.textContent = ''; return; }
+  if (!currentModelMeta || !currentModelMeta.block_count) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   const ctxSize = parseInt(document.getElementById('f-ctx-size').value) || 4096;
   const gpuDevicesRaw = (document.getElementById('f-gpu-devices').value || '').trim();
   const gpus = await fetchGpuInfoCached();
-  if (!gpus.length) { el.textContent = ''; return; }
+  if (!gpus.length) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   // Determine which GPUs are active
   let activeGpus;
@@ -102,12 +110,20 @@ async function updateGpuLayersSuggestion() {
   } else {
     activeGpus = gpus;
   }
-  if (!activeGpus.length) { el.textContent = ''; return; }
+  if (!activeGpus.length) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   // For multi-GPU: llama.cpp distributes layers, so sum free VRAM
   const totalFreeMb = activeGpus.reduce((s, g) => s + g.memory_free_mb, 0);
   const maxLayers = calcMaxGpuLayers(currentModelMeta, totalFreeMb, ctxSize);
-  if (maxLayers === null) { el.textContent = ''; return; }
+  if (maxLayers === null) {
+    el.textContent = '';
+    el.classList.remove('text-success');
+    return;
+  }
 
   const freeGb = (totalFreeMb / 1024).toFixed(1);
   const allFit = maxLayers >= currentModelMeta.block_count;
@@ -116,7 +132,7 @@ async function updateGpuLayersSuggestion() {
     : `${activeGpus.length} GPUs`;
 
   el.textContent = `Suggested ≤${maxLayers} layers (${gpuLabel}, ${freeGb} GB free)${allFit ? ' - full offload fits' : ''}`;
-  el.style.color = allFit ? 'var(--green)' : '';
+  el.classList.toggle('text-success', allFit);
 }
 
 function scheduleSuggestionUpdate() {
@@ -234,7 +250,10 @@ async function updateGpuLayersTotal(modelPath) {
   const suggEl = document.getElementById('gpu-layers-suggestion');
   label.textContent = '';
   currentModelMeta = null;
-  if (suggEl) suggEl.textContent = '';
+  if (suggEl) {
+    suggEl.textContent = '';
+    suggEl.classList.remove('text-success');
+  }
   if (!modelPath || !modelPath.toLowerCase().endsWith('.gguf')) return;
   try {
     const res = await apiFetch(`/api/model-layers?path=${encodeURIComponent(modelPath)}`);

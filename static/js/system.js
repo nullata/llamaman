@@ -3,6 +3,10 @@
 // -------------------------------------------------------------------------
 // System info (CPU & RAM)
 // -------------------------------------------------------------------------
+function gpuProgressToneClass(pct) {
+  return pct > 90 ? 'progress-tone-danger' : pct > 70 ? 'progress-tone-warning' : 'progress-tone-success';
+}
+
 async function loadSystemInfo() {
   try {
     const card = document.getElementById('system-info-card');
@@ -11,15 +15,13 @@ async function loadSystemInfo() {
     const res = await apiFetch('/api/system-info');
     const d = await res.json();
     if (d.error) return;
-    card.style.display = '';
+    card.hidden = false;
 
     const coresLabel = document.getElementById('system-cores');
     coresLabel.textContent = `${d.cpu_cores} cores`;
 
     const cpuPct = Math.round(d.cpu_percent);
     const ramPct = Math.round(d.ram_percent);
-    const cpuColor = cpuPct > 90 ? 'var(--red)' : cpuPct > 70 ? 'var(--yellow)' : 'var(--green)';
-    const ramColor = ramPct > 90 ? 'var(--red)' : ramPct > 70 ? 'var(--yellow)' : 'var(--green)';
 
     const ramUsedGB = (d.ram_used_mb / 1024).toFixed(1);
     const ramTotalGB = (d.ram_total_mb / 1024).toFixed(1);
@@ -27,16 +29,12 @@ async function loadSystemInfo() {
     container.innerHTML = `
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">CPU</span>
-        <div class="gpu-bar-track">
-          <div class="gpu-bar-fill" style="width:${cpuPct}%;background:${cpuColor};"></div>
-        </div>
+        <progress class="gpu-bar-progress ${gpuProgressToneClass(cpuPct)}" max="100" value="${cpuPct}"></progress>
         <span class="gpu-bar-text">${cpuPct}%</span>
       </div>
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">RAM</span>
-        <div class="gpu-bar-track">
-          <div class="gpu-bar-fill" style="width:${ramPct}%;background:${ramColor};"></div>
-        </div>
+        <progress class="gpu-bar-progress ${gpuProgressToneClass(ramPct)}" max="100" value="${ramPct}"></progress>
         <span class="gpu-bar-text">${ramUsedGB} / ${ramTotalGB} GB (${ramPct}%)</span>
       </div>
     `;
@@ -57,37 +55,32 @@ async function loadGpuInfo() {
     const data = await res.json();
 
     if (!data.gpus || data.gpus.length === 0) {
-      card.style.display = 'none';
+      card.hidden = true;
       showGpuWarning();
       return;
     }
 
-    card.style.display = '';
+    card.hidden = false;
+    hideGpuWarning();
     container.innerHTML = '';
 
     data.gpus.forEach(gpu => {
       const vramPct = Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100);
-      const vramColor = vramPct > 90 ? 'var(--red)' : vramPct > 70 ? 'var(--yellow)' : 'var(--green)';
       const corePct = gpu.utilization_pct ?? 0;
-      const coreColor = corePct > 90 ? 'var(--red)' : corePct > 70 ? 'var(--yellow)' : 'var(--green)';
       const row = document.createElement('div');
       row.className = 'gpu-bar-row';
       row.innerHTML = `
         <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index}</span>
-        <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:0.75em;width:3em;color:var(--muted);">core</span>
-            <div class="gpu-bar-track" style="flex:1;">
-              <div class="gpu-bar-fill" style="width:${corePct}%;background:${coreColor};"></div>
-            </div>
-            <span class="gpu-bar-text" style="width:3.5em;">${corePct}%</span>
+        <div class="gpu-bar-stack">
+          <div class="gpu-bar-subrow">
+            <span class="gpu-bar-subrow-label">core</span>
+            <progress class="gpu-bar-progress ${gpuProgressToneClass(corePct)}" max="100" value="${corePct}"></progress>
+            <span class="gpu-bar-subtext">${corePct}%</span>
           </div>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:0.75em;width:3em;color:var(--muted);">VRAM</span>
-            <div class="gpu-bar-track" style="flex:1;">
-              <div class="gpu-bar-fill" style="width:${vramPct}%;background:${vramColor};"></div>
-            </div>
-            <span class="gpu-bar-text" style="width:3.5em;">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
+          <div class="gpu-bar-subrow">
+            <span class="gpu-bar-subrow-label">VRAM</span>
+            <progress class="gpu-bar-progress ${gpuProgressToneClass(vramPct)}" max="100" value="${vramPct}"></progress>
+            <span class="gpu-bar-subtext">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
           </div>
         </div>
       `;
@@ -95,12 +88,18 @@ async function loadGpuInfo() {
     });
   } catch (e) {
     const card = document.getElementById('gpu-vram-card');
-    if (card) card.style.display = 'none';
+    if (card) card.hidden = true;
     showGpuWarning();
   }
 }
 function showGpuWarning() {
-  document.getElementById('gpu-warning').style.display = 'block';
+  const warning = document.getElementById('gpu-warning');
+  if (warning) warning.hidden = false;
+}
+
+function hideGpuWarning() {
+  const warning = document.getElementById('gpu-warning');
+  if (warning) warning.hidden = true;
 }
 
 // -------------------------------------------------------------------------
@@ -324,7 +323,7 @@ async function loadHuggingFaceTokens() {
   if (!list) return;
 
   if (huggingFaceTokens.length === 0) {
-    list.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px;">No Hugging Face tokens saved.</div>';
+    list.innerHTML = '<div class="list-empty-state">No Hugging Face tokens saved.</div>';
     return;
   }
 
@@ -338,8 +337,8 @@ async function loadHuggingFaceTokens() {
     item.innerHTML = `
       <div class="dl-item-top">
         <span class="dl-item-name"><strong>${escHtml(token.name)}</strong></span>
-        <code style="font-size:11px;color:var(--muted);">${escHtml(token.preview)}</code>
-        <span style="font-size:11px;color:var(--muted);">${escHtml(created)}</span>
+        <code class="list-meta-code">${escHtml(token.preview)}</code>
+        <span class="list-meta-date">${escHtml(created)}</span>
         <button class="btn-xs danger btn-hf-token-delete" data-id="${token.id}"><i class="fa-solid fa-trash"></i> Delete</button>
       </div>
     `;
@@ -413,7 +412,7 @@ async function loadApiKeys() {
     const res = await apiFetch('/api/api-keys');
     const keys = await res.json();
     if (keys.length === 0) {
-      list.innerHTML = '<div style="color:var(--muted);font-size:12px;text-align:center;padding:12px;">No API keys yet. API is open to all requests.</div>';
+      list.innerHTML = '<div class="list-empty-state">No API keys yet. API is open to all requests.</div>';
       return;
     }
     list.innerHTML = '';
@@ -424,8 +423,8 @@ async function loadApiKeys() {
       item.innerHTML = `
         <div class="dl-item-top">
           <span class="dl-item-name"><strong>${escHtml(k.name)}</strong></span>
-          <code style="font-size:11px;color:var(--muted);">${escHtml(k.prefix)}</code>
-          <span style="font-size:11px;color:var(--muted);">${date}</span>
+          <code class="list-meta-code">${escHtml(k.prefix)}</code>
+          <span class="list-meta-date">${date}</span>
           <button class="btn-xs danger btn-ak-delete" data-id="${k.id}"><i class="fa-solid fa-trash"></i> Revoke</button>
         </div>
       `;
@@ -487,8 +486,8 @@ if (btnCopyKey) btnCopyKey.addEventListener('click', () => {
   const onCopied = () => {
     if (icon) {
       icon.className = 'fa-solid fa-check';
-      icon.style.color = 'var(--green)';
-      setTimeout(() => { icon.className = 'fa-solid fa-copy'; icon.style.color = ''; }, 2000);
+      icon.classList.add('icon-copy-success');
+      setTimeout(() => { icon.className = 'fa-solid fa-copy'; }, 2000);
     }
   };
 
@@ -496,9 +495,8 @@ if (btnCopyKey) btnCopyKey.addEventListener('click', () => {
     navigator.clipboard.writeText(key).then(onCopied);
   } else {
     const ta = document.createElement('textarea');
+    ta.className = 'clipboard-copy-buffer';
     ta.value = key;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
     document.execCommand('copy');

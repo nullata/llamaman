@@ -27,7 +27,7 @@
     </nav>
   </header>
 
-  <div id="gpu-warning">
+  <div id="gpu-warning" hidden>
     <i class="fa-solid fa-triangle-exclamation"></i> No GPU detected. Set GPU Layers to 0 to run fully on CPU, or a
     partial number to offload what fits in VRAM.
   </div>
@@ -65,7 +65,7 @@
     <main class="main">
 
       <!-- System Info (CPU & RAM) -->
-      <div class="card" id="system-info-card" style="display:none;">
+      <div class="card" id="system-info-card" hidden>
         <div class="section-heading">
           <h2>System</h2>
           <span id="system-cores" class="text-meta"></span>
@@ -76,7 +76,7 @@
       </div>
 
       <!-- GPU VRAM Indicator -->
-      <div class="card" id="gpu-vram-card" style="display:none;">
+      <div class="card" id="gpu-vram-card" hidden>
         <div class="section-heading">
           <h2>GPU VRAM</h2>
           <button class="btn-icon btn-icon-sm" id="btn-refresh-gpu" title="Refresh GPU info"><i
@@ -100,7 +100,7 @@
               aria-controls="settings-tab-cleanup" aria-selected="false" tabindex="-1" data-tab="cleanup">Cleanup
               Settings</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-appsettings"
-              aria-controls="settings-tab-appsettings" aria-selected="false" tabindex="-1" data-tab="appsettings">LRU</button>
+              aria-controls="settings-tab-appsettings" aria-selected="false" tabindex="-1" data-tab="appsettings">Application</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-downloads"
               aria-controls="settings-tab-downloads" aria-selected="false" tabindex="-1" data-tab="downloads">Downloads</button>
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-huggingface"
@@ -128,7 +128,7 @@
                     <input id="f-gpu-layers" type="number" value="-1" min="-1" />
                     <span id="gpu-layers-total" class="text-meta"></span>
                   </div>
-                  <div id="gpu-layers-suggestion" class="text-meta" style="margin-top:4px;font-size:0.82em;min-height:1.1em; text-wrap: wrap;"></div>
+                  <div id="gpu-layers-suggestion" class="text-meta gpu-layers-suggestion"></div>
                 </div>
                 <div class="form-group">
                   <label for="f-ctx-size">Context Size</label>
@@ -280,7 +280,7 @@
           <div class="tab-panel" id="settings-tab-huggingface" role="tabpanel"
             aria-labelledby="settings-tab-btn-huggingface" data-tab-panel="huggingface" hidden>
             <p class="hint-text">Save Hugging Face access tokens here, then pick one when starting a download for gated or private repos.</p>
-            <div class="form-actions form-actions-compact" style="margin-bottom:14px;">
+            <div class="form-actions form-actions-compact">
               <input id="hf-token-name" type="text" placeholder="Token name (e.g. Personal)" class="input-narrow" />
               <input id="hf-token-value" type="password" placeholder="hf_..." autocomplete="new-password" class="input-narrow" />
               <button class="btn btn-primary" type="button" id="btn-save-hf-token"><i class="fa-solid fa-plus"></i>
@@ -291,7 +291,7 @@
 
           <div class="tab-panel" id="settings-tab-apikeys" role="tabpanel"
             aria-labelledby="settings-tab-btn-apikeys" data-tab-panel="apikeys" hidden>
-            <div class="cleanup-settings-grid" style="margin-bottom:14px;">
+            <div class="cleanup-settings-grid cleanup-settings-grid-spaced">
               <div class="form-group cleanup-toggle-grid">
                 <label for="s-require-auth">Require authentication for all endpoints</label>
                 <label class="toggle-switch" for="s-require-auth" aria-label="Require authentication for all endpoints">
