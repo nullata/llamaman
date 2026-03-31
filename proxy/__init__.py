@@ -9,6 +9,7 @@ from werkzeug.serving import make_server
 from werkzeug.wrappers import Request as WerkzeugRequest
 
 from config import REQUEST_TIMEOUT, logger
+from core.proxy_sampling import PROXY_SAMPLING_PATHS, apply_proxy_sampling_overrides
 from core.state import instances, instances_lock
 
 
@@ -178,6 +179,21 @@ def _is_inference_request(environ: dict) -> bool:
     return path in _GATED_PATHS
 
 
+def _apply_proxy_sampling_request_overrides(req_data: bytes, path: str, config: dict | None) -> bytes:
+    if path not in PROXY_SAMPLING_PATHS:
+        return req_data
+
+    try:
+        body = json.loads(req_data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return req_data
+
+    updated_body = apply_proxy_sampling_overrides(body, config)
+    if updated_body == body:
+        return req_data
+    return json.dumps(updated_body).encode("utf-8")
+
+
 def _check_proxy_auth(environ, start_response):
     """Enforce bearer token auth on proxy ports when require_auth is enabled.
 
@@ -246,9 +262,17 @@ def make_proxy_app(inst_id: str, internal_port: int):
             if req.query_string:
                 target += f"?{req.query_string.decode()}"
 
-            headers = {k: v for k, v in req.headers if k.lower() != "host"}
+            headers = {
+                k: v for k, v in req.headers
+                if k.lower() not in ("host", "content-length")
+            }
 
             req_data = req.get_data()
+            req_data = _apply_proxy_sampling_request_overrides(
+                req_data,
+                req.path,
+                inst.get("config", {}) if inst else {},
+            )
             last_err = None
             resp = None
             for _attempt in range(3):

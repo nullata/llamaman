@@ -339,6 +339,34 @@ header span {
   max-width: 100%;
 }
 
+.launch-settings-section {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  background: var(--surface);
+}
+
+.launch-settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.launch-settings-section-header h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.launch-inline-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, max-content));
+  gap: 12px 14px;
+  align-items: end;
+}
+
 .cleanup-toggle-grid {
   display: grid;
   grid-template-columns: max-content 40px;
@@ -1257,6 +1285,10 @@ body.login-page {
 
 .cleanup-settings-input {
   width: 80px;
+}
+
+.launch-settings-input {
+  width: 90px;
 }
 
 .gpu-layers-suggestion {

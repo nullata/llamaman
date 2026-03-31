@@ -26,6 +26,7 @@ from core.helpers import (
     is_pid_alive,
     scan_llama_server_processes,
 )
+from core.proxy_sampling import apply_proxy_sampling_overrides
 from api.models import detect_quant, discover_models
 from storage import get_storage
 from core.state import instances, instances_lock, update_instance_stats
@@ -272,6 +273,10 @@ def _ensure_model_running(
             max_queue_depth=preset.get("max_queue_depth", 200),
             share_queue=preset.get("share_queue", False),
             embedding_model=preset.get("embedding_model", False),
+            proxy_sampling_override_enabled=bool(preset.get("proxy_sampling_override_enabled", False)),
+            proxy_sampling_temperature=float(preset.get("proxy_sampling_temperature", 0.8)),
+            proxy_sampling_top_k=int(preset.get("proxy_sampling_top_k", 40)),
+            proxy_sampling_top_p=float(preset.get("proxy_sampling_top_p", 0.95)),
         )
         if err:
             return None, err
@@ -439,6 +444,8 @@ def _translate_to_openai(body: dict) -> dict:
     opts = body.get("options", {})
     if "temperature" in opts:
         openai_body["temperature"] = opts["temperature"]
+    if "top_k" in opts:
+        openai_body["top_k"] = opts["top_k"]
     if "top_p" in opts:
         openai_body["top_p"] = opts["top_p"]
     if "seed" in opts:
@@ -448,7 +455,7 @@ def _translate_to_openai(body: dict) -> dict:
     if "num_predict" in opts:
         openai_body["max_tokens"] = opts["num_predict"]
 
-    for key in ("temperature", "top_p", "seed", "stop", "max_tokens"):
+    for key in ("temperature", "top_k", "top_p", "seed", "stop", "max_tokens"):
         if key in body and key not in openai_body:
             openai_body[key] = body[key]
 
@@ -680,6 +687,7 @@ def _handle_request(mode: str = "chat"):
             return jsonify({"error": "request queue full"}), 429
 
     openai_body = _translate_to_openai(body)
+    openai_body = apply_proxy_sampling_overrides(openai_body, inst.get("config", {}))
     stream_qp = request.args.get("stream", "").lower()
     if stream_qp in ("false", "0", "no"):
         stream = False

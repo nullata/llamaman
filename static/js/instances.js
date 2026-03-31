@@ -212,6 +212,18 @@ async function removeInstance(id) {
 // -------------------------------------------------------------------------
 // Launch form
 // -------------------------------------------------------------------------
+function updateProxySamplingOverrideState() {
+  const enabled = !!document.getElementById('f-proxy-sampling-override-enabled')?.checked;
+  [
+    'f-proxy-sampling-temperature',
+    'f-proxy-sampling-top-k',
+    'f-proxy-sampling-top-p',
+  ].forEach((id) => {
+    const input = document.getElementById(id);
+    if (input) input.disabled = !enabled;
+  });
+}
+
 async function updatePortSuggestion() {
   const portField = document.getElementById('f-port');
   if (!portField) return;
@@ -238,7 +250,20 @@ function readLaunchForm() {
     max_queue_depth: parseInt(document.getElementById('f-max-queue-depth').value) || 200,
     share_queue: document.getElementById('f-share-queue').checked,
     embedding_model: document.getElementById('f-embedding-model').checked,
+    proxy_sampling_override_enabled: document.getElementById('f-proxy-sampling-override-enabled').checked,
+    proxy_sampling_temperature: parseFloat(document.getElementById('f-proxy-sampling-temperature').value),
+    proxy_sampling_top_k: parseInt(document.getElementById('f-proxy-sampling-top-k').value, 10),
+    proxy_sampling_top_p: parseFloat(document.getElementById('f-proxy-sampling-top-p').value),
   };
+  if (!Number.isFinite(body.proxy_sampling_temperature) || body.proxy_sampling_temperature < 0) {
+    throw new Error('Proxy-side temperature must be 0 or greater');
+  }
+  if (!Number.isInteger(body.proxy_sampling_top_k) || body.proxy_sampling_top_k < 0) {
+    throw new Error('Proxy-side top k must be an integer >= 0');
+  }
+  if (!Number.isFinite(body.proxy_sampling_top_p) || body.proxy_sampling_top_p <= 0 || body.proxy_sampling_top_p > 1) {
+    throw new Error('Proxy-side top p must be greater than 0 and no more than 1');
+  }
   const threads = document.getElementById('f-threads').value.trim();
   if (threads) body.threads = parseInt(threads);
   const parallel = document.getElementById('f-parallel').value.trim();
@@ -333,3 +358,9 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
     toast('Error saving preset: ' + e.message, 'error');
   }
 });
+
+const proxySamplingOverrideToggle = document.getElementById('f-proxy-sampling-override-enabled');
+if (proxySamplingOverrideToggle) {
+  proxySamplingOverrideToggle.addEventListener('change', updateProxySamplingOverrideState);
+  updateProxySamplingOverrideState();
+}

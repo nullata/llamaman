@@ -2,6 +2,7 @@
 
 from flask import Blueprint, jsonify, request
 
+from core.proxy_sampling import parse_proxy_sampling_config
 from storage import get_storage
 
 bp = Blueprint("presets", __name__)
@@ -46,6 +47,9 @@ def api_preset_save(model_path):
         return jsonify({"error": "ctx_size must be an integer"}), 400
     if ctx_size <= 0:
         return jsonify({"error": "ctx_size must be greater than 0"}), 400
+    proxy_sampling_config, proxy_sampling_err = parse_proxy_sampling_config(body)
+    if proxy_sampling_err:
+        return jsonify({"error": proxy_sampling_err}), 400
     data = {
         "n_gpu_layers": body.get("n_gpu_layers", -1),
         "ctx_size": ctx_size,
@@ -58,6 +62,7 @@ def api_preset_save(model_path):
         "max_queue_depth": body.get("max_queue_depth", 200),
         "share_queue": body.get("share_queue", False),
         "embedding_model": body.get("embedding_model", False),
+        **proxy_sampling_config,
     }
     get_storage().save_preset(model_path, data)
     return jsonify({"status": "saved"})

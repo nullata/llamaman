@@ -216,6 +216,11 @@ async function selectModel(model, el) {
       document.getElementById('f-max-queue-depth').value = p.max_queue_depth || 200;
       document.getElementById('f-share-queue').checked = !!p.share_queue;
       document.getElementById('f-embedding-model').checked = !!p.embedding_model;
+      document.getElementById('f-proxy-sampling-override-enabled').checked = !!p.proxy_sampling_override_enabled;
+      document.getElementById('f-proxy-sampling-temperature').value = p.proxy_sampling_temperature ?? 0.8;
+      document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
+      document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
+      if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
       toast('Preset loaded', 'info');
     }
   } catch (e) { /* no preset, use defaults */ }
