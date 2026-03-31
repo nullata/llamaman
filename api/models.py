@@ -10,7 +10,9 @@ from flask import Blueprint, jsonify, request
 
 from config import MODELS_DIR
 from core.helpers import format_size
+from core.model_sources import get_model_sources, remove_model_sources_for_path, resolve_model_source_repo_id
 from core.state import instances, instances_lock
+from storage import get_storage
 
 bp = Blueprint("models", __name__)
 
@@ -71,6 +73,17 @@ def discover_models(models_dir: str) -> list[dict]:
             seen.add(m["path"])
             unique.append(m)
     return unique
+
+
+def attach_model_sources(models: list[dict], sources: dict[str, str]) -> list[dict]:
+    enriched = []
+    for model in models:
+        enriched_model = dict(model)
+        repo_id = resolve_model_source_repo_id(enriched_model["path"], sources)
+        if repo_id:
+            enriched_model["repo_id"] = repo_id
+        enriched.append(enriched_model)
+    return enriched
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +173,7 @@ def get_gguf_metadata(filepath: str) -> dict:
 @bp.route("/api/models")
 def api_models():
     models = discover_models(MODELS_DIR)
+    models = attach_model_sources(models, get_model_sources(get_storage().get_settings()))
     return jsonify(models)
 
 
@@ -201,6 +215,7 @@ def api_models_delete():
         return jsonify({"error": str(e)}), 500
 
     from config import logger
+    remove_model_sources_for_path(resolved)
     logger.info("Deleted model: %s", resolved)
     return jsonify({"status": "deleted"})
 

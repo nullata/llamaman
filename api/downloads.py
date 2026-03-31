@@ -13,6 +13,7 @@ from flask import Blueprint, Response, jsonify, request
 from api.settings import get_hf_token_secret
 from config import DATA_DIR, LOGS_DIR, MODELS_DIR, logger
 from core.helpers import cleanup_download_dir, kill_instance_process, public_dict, read_log_file, stream_log_file
+from core.model_sources import record_model_source
 from core.state import downloads, downloads_lock, save_state
 from storage import get_storage
 
@@ -140,6 +141,7 @@ def api_downloads_create():
         dest_name = Path(filename).stem
     dest_path = os.path.join(MODELS_DIR, dest_name)
     os.makedirs(dest_path, exist_ok=True)
+    model_path = os.path.join(dest_path, filename) if filename else dest_path
 
     dl_id = str(uuid.uuid4())
 
@@ -169,6 +171,8 @@ def api_downloads_create():
 
     with downloads_lock:
         downloads[dl_id] = dl
+
+    record_model_source(dest_path, repo_id, model_path=model_path)
 
     logger.info("Download started: %s -> %s (pid %d)", repo_id, dest_path, proc.pid)
     save_state()
