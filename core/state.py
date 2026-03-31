@@ -71,6 +71,7 @@ def save_state():
                     "started_at": dl.get("started_at", 0),
                     "hf_token_id": dl.get("_hf_token_id", ""),
                     "per_model_speed_limit_mbps": dl.get("per_model_speed_limit_mbps", 0),
+                    "retry_attempts": dl.get("retry_attempts", 0),
                 })
 
         try:
@@ -265,6 +266,7 @@ def load_state():
             "started_at": entry.get("started_at", 0),
             "_hf_token_id": entry.get("hf_token_id", ""),
             "per_model_speed_limit_mbps": entry.get("per_model_speed_limit_mbps", 0),
+            "retry_attempts": entry.get("retry_attempts", 0),
             "_process": None,
             "_log_fh": None,
         }

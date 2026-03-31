@@ -134,6 +134,13 @@ async function loadSettings() {
 
     const speedLimit = document.getElementById('s-global-speed-limit');
     if (speedLimit) speedLimit.value = s.global_speed_limit_mbps ?? 0;
+    const autoRetryFailedDownloads = document.getElementById('s-auto-retry-failed-downloads');
+    if (autoRetryFailedDownloads) autoRetryFailedDownloads.checked = !!s.auto_retry_failed_downloads;
+    const retryCountPerFailedDownload = document.getElementById('s-retry-count-per-failed-download');
+    if (retryCountPerFailedDownload) {
+      retryCountPerFailedDownload.value = s.retry_count_per_failed_download ?? 3;
+      updateDownloadRetryCountState();
+    }
 
     const adminUiEvictionToggle = document.getElementById('s-admin-ui-enforce-max-models');
     if (adminUiEvictionToggle) {
@@ -584,13 +591,29 @@ if (apiKeyModal) apiKeyModal.addEventListener('click', (e) => {
 // -------------------------------------------------------------------------
 // Download Settings (global speed limit)
 // -------------------------------------------------------------------------
+function updateDownloadRetryCountState() {
+  const toggle = document.getElementById('s-auto-retry-failed-downloads');
+  const input = document.getElementById('s-retry-count-per-failed-download');
+  if (!toggle || !input) return;
+  input.disabled = !toggle.checked;
+}
+
 async function saveDownloadSettings() {
   const limitMbps = parseFloat(document.getElementById('s-global-speed-limit').value) || 0;
+  const autoRetryFailedDownloads = !!document.getElementById('s-auto-retry-failed-downloads')?.checked;
+  const retryCountPerFailedDownload = Math.max(
+    1,
+    parseInt(document.getElementById('s-retry-count-per-failed-download').value, 10) || 3,
+  );
   try {
     const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ global_speed_limit_mbps: limitMbps }),
+      body: JSON.stringify({
+        global_speed_limit_mbps: limitMbps,
+        auto_retry_failed_downloads: autoRetryFailedDownloads,
+        retry_count_per_failed_download: retryCountPerFailedDownload,
+      }),
     });
     if (res && res.ok) {
       const status = document.getElementById('download-settings-status');
@@ -604,3 +627,8 @@ async function saveDownloadSettings() {
 
 const btnSaveDownloadSettings = document.getElementById('btn-save-download-settings');
 if (btnSaveDownloadSettings) btnSaveDownloadSettings.addEventListener('click', saveDownloadSettings);
+const autoRetryFailedDownloadsToggle = document.getElementById('s-auto-retry-failed-downloads');
+if (autoRetryFailedDownloadsToggle) {
+  autoRetryFailedDownloadsToggle.addEventListener('change', updateDownloadRetryCountState);
+  updateDownloadRetryCountState();
+}

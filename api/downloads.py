@@ -77,6 +77,37 @@ def _restart_existing_download(dl: dict):
         return None, None, None, str(e)
 
 
+def _activate_download_process(dl: dict, proc, log_fh, log_file: str, *, reset_started_at: bool) -> None:
+    dl["status"] = "downloading"
+    dl["pid"] = proc.pid
+    dl["log_file"] = log_file
+    dl["_process"] = proc
+    dl["_log_fh"] = log_fh
+    if reset_started_at:
+        dl["started_at"] = time.time()
+
+
+def restart_download_in_place(
+    dl: dict,
+    *,
+    reset_started_at: bool,
+    reset_retry_attempts: bool = False,
+    increment_retry_attempts: bool = False,
+) -> str | None:
+    proc, log_fh, log_file, err = _restart_existing_download(dl)
+    if err:
+        return err
+
+    _activate_download_process(dl, proc, log_fh, log_file, reset_started_at=reset_started_at)
+
+    if reset_retry_attempts:
+        dl["retry_attempts"] = 0
+    elif increment_retry_attempts:
+        dl["retry_attempts"] = int(dl.get("retry_attempts", 0) or 0) + 1
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -131,6 +162,7 @@ def api_downloads_create():
         "_hf_token": token,
         "_hf_token_id": token_id,
         "per_model_speed_limit_mbps": per_model_mbps,
+        "retry_attempts": 0,
         "_process": proc,
         "_log_fh": log_fh,
     }
@@ -198,11 +230,7 @@ def api_downloads_resume(dl_id):
             code = 409 if "token" in err.lower() else 500
             return jsonify({"error": err}), code
 
-        dl["status"] = "downloading"
-        dl["pid"] = proc.pid
-        dl["log_file"] = log_file
-        dl["_process"] = proc
-        dl["_log_fh"] = log_fh
+        _activate_download_process(dl, proc, log_fh, log_file, reset_started_at=False)
 
     save_state()
     logger.info("Download resumed: %s (pid %d)", dl_id, proc.pid)
@@ -218,20 +246,17 @@ def api_downloads_retry(dl_id):
         if dl["status"] != "failed":
             return jsonify({"error": "Only failed downloads can be retried"}), 409
 
-        proc, log_fh, log_file, err = _restart_existing_download(dl)
+        err = restart_download_in_place(
+            dl,
+            reset_started_at=True,
+            reset_retry_attempts=True,
+        )
         if err:
             code = 409 if "token" in err.lower() else 500
             return jsonify({"error": err}), code
 
-        dl["status"] = "downloading"
-        dl["pid"] = proc.pid
-        dl["log_file"] = log_file
-        dl["_process"] = proc
-        dl["_log_fh"] = log_fh
-        dl["started_at"] = time.time()
-
     save_state()
-    logger.info("Download retried: %s (pid %d)", dl_id, proc.pid)
+    logger.info("Download retried: %s (pid %d)", dl_id, dl["pid"])
     return jsonify(public_dict(dl))
 
 

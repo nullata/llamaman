@@ -199,9 +199,10 @@
               </div>
               <div class="form-group cleanup-input-row">
                 <label for="s-dl-cleanup-age">Download cleanup age (hours)</label>
-                <input id="s-dl-cleanup-age" type="number" value="24" min="1" />
+                <input id="s-dl-cleanup-age" class="cleanup-settings-input" type="number" value="24" min="1" />
                 <p class="hint-text cleanup-last-ran">Last ran: <span id="s-dl-cleanup-last-ran">Never</span></p>
               </div>
+              <div class="cleanup-section-divider" aria-hidden="true"></div>
               <div class="form-group cleanup-toggle-grid">
                 <label for="s-inst-cleanup-enabled">Auto-clean stopped instances</label>
                 <label class="toggle-switch" for="s-inst-cleanup-enabled" aria-label="Auto-clean stopped instances">
@@ -211,9 +212,10 @@
               </div>
               <div class="form-group cleanup-input-row">
                 <label for="s-inst-cleanup-age">Instance cleanup age (hours)</label>
-                <input id="s-inst-cleanup-age" type="number" value="24" min="1" />
+                <input id="s-inst-cleanup-age" class="cleanup-settings-input" type="number" value="24" min="1" />
                 <p class="hint-text cleanup-last-ran">Last ran: <span id="s-inst-cleanup-last-ran">Never</span></p>
               </div>
+              <div class="cleanup-section-divider" aria-hidden="true"></div>
               <div class="form-group cleanup-toggle-grid">
                 <label for="s-stale-records-enabled">Auto-remove stale instance records</label>
                 <label class="toggle-switch" for="s-stale-records-enabled" aria-label="Auto-remove stale instance records">
@@ -223,7 +225,7 @@
               </div>
               <div class="form-group cleanup-input-row">
                 <label for="s-stale-records-interval">Stale record check interval (minutes)</label>
-                <input id="s-stale-records-interval" type="number" value="5" min="1" />
+                <input id="s-stale-records-interval" class="cleanup-settings-input" type="number" value="5" min="1" />
                 <p class="hint-text cleanup-last-ran">Last ran: <span id="s-stale-records-last-ran">Never</span></p>
               </div>
             </div>
@@ -270,10 +272,23 @@
             <div class="cleanup-settings-grid">
               <div class="form-group cleanup-input-row">
                 <label for="s-global-speed-limit">Global speed limit (Mbps, 0 = unlimited)</label>
-                <input id="s-global-speed-limit" type="number" value="0" min="0" step="1" />
+                <input id="s-global-speed-limit" class="download-settings-input" type="number" value="0" min="0" step="1" />
+                <p class="hint-text">Overrides per-model speed limits for all active and future downloads.</p>
+              </div>
+              <div class="cleanup-section-divider" aria-hidden="true"></div>
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-auto-retry-failed-downloads">Auto-retry failed downloads</label>
+                <label class="toggle-switch" for="s-auto-retry-failed-downloads"
+                  aria-label="Auto-retry failed downloads">
+                  <input id="s-auto-retry-failed-downloads" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-retry-count-per-failed-download">Retry count per failed download</label>
+                <input id="s-retry-count-per-failed-download" class="download-settings-input" type="number" value="3" min="1" step="1" />
               </div>
             </div>
-            <p class="hint-text">Overrides per-model speed limits for all active and future downloads.</p>
             <div class="form-actions">
               <button class="btn btn-secondary" type="button" id="btn-save-download-settings"><i
                   class="fa-solid fa-floppy-disk"></i>

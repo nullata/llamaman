@@ -361,8 +361,29 @@ header span {
   display: contents;
 }
 
-.cleanup-input-row {
+.cleanup-settings-grid .cleanup-input-row {
+  display: contents;
+}
+
+.cleanup-settings-grid .cleanup-input-row > label {
+  grid-column: 1 / 2;
+  align-self: center;
+}
+
+.cleanup-settings-grid .cleanup-input-row > input {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.cleanup-settings-grid .cleanup-input-row > .hint-text {
   grid-column: 1 / -1;
+}
+
+.cleanup-section-divider {
+  grid-column: 1 / -1;
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0 8px;
 }
 
 .cleanup-last-ran {
@@ -1228,6 +1249,14 @@ body.login-page {
 
 .input-narrow {
   max-width: 240px;
+}
+
+.download-settings-input {
+  width: 80px;
+}
+
+.cleanup-settings-input {
+  width: 80px;
 }
 
 .gpu-layers-suggestion {

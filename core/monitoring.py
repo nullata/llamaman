@@ -21,6 +21,7 @@ _last_orphan_scan_at: float = 0.0
 _ORPHAN_SCAN_INTERVAL = 60  # seconds
 
 _last_stale_cleanup_at: float = 0.0
+_DEFAULT_FAILED_DOWNLOAD_RETRY_COUNT = 3
 
 
 def _run_cleanup() -> None:
@@ -139,6 +140,63 @@ def _run_stale_record_cleanup() -> None:
     if changed:
         save_state()
     storage.merge_settings({"cleanup": {"stale_records_last_run_at": now}})
+
+
+def _get_failed_download_retry_settings() -> tuple[bool, int]:
+    from storage import get_storage
+
+    settings = get_storage().get_settings()
+    retry_enabled = bool(settings.get("auto_retry_failed_downloads", False))
+    try:
+        retry_limit = int(settings.get("retry_count_per_failed_download", _DEFAULT_FAILED_DOWNLOAD_RETRY_COUNT))
+    except (TypeError, ValueError):
+        retry_limit = _DEFAULT_FAILED_DOWNLOAD_RETRY_COUNT
+    return retry_enabled, max(1, retry_limit)
+
+
+def _handle_download_exit(dl_id: str, exit_code: int) -> None:
+    retry_enabled, retry_limit = _get_failed_download_retry_settings()
+    should_save = False
+
+    with downloads_lock:
+        dl = downloads.get(dl_id)
+        if dl is None or dl["status"] != "downloading":
+            return
+
+        kill_instance_process(dl)
+        dl["pid"] = 0
+
+        if exit_code == 0:
+            dl["status"] = "completed"
+            should_save = True
+        else:
+            retry_attempts = int(dl.get("retry_attempts", 0) or 0)
+            if retry_enabled and retry_attempts < retry_limit:
+                from api.downloads import restart_download_in_place
+
+                err = restart_download_in_place(
+                    dl,
+                    reset_started_at=True,
+                    increment_retry_attempts=True,
+                )
+                if err is None:
+                    logger.info(
+                        "Download auto-retried: %s (%d/%d)",
+                        dl_id,
+                        dl["retry_attempts"],
+                        retry_limit,
+                    )
+                    should_save = True
+                else:
+                    logger.warning("Download auto-retry failed for %s: %s", dl_id, err)
+                    dl["status"] = "failed"
+                    should_save = True
+            else:
+                dl["status"] = "failed"
+                should_save = True
+
+    if should_save:
+        save_state()
 
 
 def _background_poller():
@@ -304,13 +362,7 @@ def _background_poller():
             if exit_code is None:
                 continue
 
-            with downloads_lock:
-                dl = downloads.get(dl_id)
-                if dl and dl["status"] not in ("cancelled",):
-                    kill_instance_process(dl)
-                    dl["status"] = "completed" if exit_code == 0 else "failed"
-                    dl["pid"] = 0
-            save_state()
+            _handle_download_exit(dl_id, exit_code)
 
 
 def start_background_poller():
