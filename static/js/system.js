@@ -29,12 +29,12 @@ async function loadSystemInfo() {
     container.innerHTML = `
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">CPU</span>
-        <progress class="gpu-bar-progress ${gpuProgressToneClass(cpuPct)}" max="100" value="${cpuPct}"></progress>
+        ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(cpuPct), percent: cpuPct })}
         <span class="gpu-bar-text">${cpuPct}%</span>
       </div>
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">RAM</span>
-        <progress class="gpu-bar-progress ${gpuProgressToneClass(ramPct)}" max="100" value="${ramPct}"></progress>
+        ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(ramPct), percent: ramPct })}
         <span class="gpu-bar-text">${ramUsedGB} / ${ramTotalGB} GB (${ramPct}%)</span>
       </div>
     `;
@@ -74,12 +74,12 @@ async function loadGpuInfo() {
         <div class="gpu-bar-stack">
           <div class="gpu-bar-subrow">
             <span class="gpu-bar-subrow-label">core</span>
-            <progress class="gpu-bar-progress ${gpuProgressToneClass(corePct)}" max="100" value="${corePct}"></progress>
+            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(corePct), percent: corePct })}
             <span class="gpu-bar-subtext">${corePct}%</span>
           </div>
           <div class="gpu-bar-subrow">
             <span class="gpu-bar-subrow-label">VRAM</span>
-            <progress class="gpu-bar-progress ${gpuProgressToneClass(vramPct)}" max="100" value="${vramPct}"></progress>
+            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(vramPct), percent: vramPct })}
             <span class="gpu-bar-subtext">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
           </div>
         </div>

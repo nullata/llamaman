@@ -87,10 +87,9 @@ function renderInstances() {
     let queueLine = '';
     if (q) {
       const qPct = q.max_queue_depth > 0 ? Math.round((q.queued / q.max_queue_depth) * 100) : 0;
-      const qMax = Math.max(q.max_queue_depth || 0, 1);
       queueLine = `<div class="meta instance-queue-row">
         <span class="instance-queue-label">Queue</span>
-        <progress class="instance-queue-progress ${queueToneClass(qPct)}" max="${qMax}" value="${Math.min(q.queued, qMax)}"></progress>
+        ${renderMeterSvg({ meterClass: 'instance-queue-meter', toneClass: queueToneClass(qPct), percent: qPct })}
         <span class="instance-queue-text">${q.active}/${q.max_concurrent} active · ${q.queued} queued</span>
       </div>`;
     }

@@ -668,54 +668,42 @@ select option {
   font-variant-numeric: tabular-nums;
 }
 
-.gpu-bar-progress,
-.instance-queue-progress {
-  --progress-fill: var(--accent);
-  appearance: none;
-  -webkit-appearance: none;
-  accent-color: var(--progress-fill);
-  color: var(--progress-fill);
-  border: none;
-  background: var(--surface);
-  border-radius: 3px;
-  overflow: hidden;
+.meter-svg {
+  --meter-fill: var(--accent);
   display: block;
+  overflow: hidden;
 }
 
-.gpu-bar-progress {
+.meter-track {
+  fill: var(--surface);
+}
+
+.meter-fill {
+  fill: var(--meter-fill);
+  transition: width .3s;
+}
+
+.gpu-bar-meter {
   flex: 1;
   height: 14px;
 }
 
-.instance-queue-progress {
+.instance-queue-meter {
   flex: 1;
   max-width: 120px;
   height: 8px;
 }
 
-.gpu-bar-progress::-webkit-progress-bar,
-.instance-queue-progress::-webkit-progress-bar {
-  background: var(--surface);
-}
-
-.gpu-bar-progress::-webkit-progress-value,
-.instance-queue-progress::-webkit-progress-value,
-.gpu-bar-progress::-moz-progress-bar,
-.instance-queue-progress::-moz-progress-bar {
-  background: var(--progress-fill);
-  border-radius: 3px;
-}
-
 .progress-tone-success {
-  --progress-fill: var(--accent);
+  --meter-fill: var(--accent);
 }
 
 .progress-tone-warning {
-  --progress-fill: var(--yellow);
+  --meter-fill: var(--yellow);
 }
 
 .progress-tone-danger {
-  --progress-fill: var(--red);
+  --meter-fill: var(--red);
 }
 
 /* ---- Sidebar Downloads Section ---- */
