@@ -3,9 +3,6 @@
 // -------------------------------------------------------------------------
 // Instance polling
 // -------------------------------------------------------------------------
-function queueToneClass(pct) {
-  return pct > 80 ? 'progress-tone-danger' : pct > 50 ? 'progress-tone-warning' : 'progress-tone-success';
-}
 
 async function pollInstances() {
   try {
@@ -87,10 +84,13 @@ function renderInstances() {
     let queueLine = '';
     if (q) {
       const qPct = q.max_queue_depth > 0 ? Math.round((q.queued / q.max_queue_depth) * 100) : 0;
-      queueLine = `<div class="meta instance-queue-row">
-        <span class="instance-queue-label">Queue</span>
-        ${renderMeterSvg({ meterClass: 'instance-queue-meter', toneClass: queueToneClass(qPct), percent: qPct, meterHeight: 8, cornerRadius: 3 })}
-        <span class="instance-queue-text">${q.active}/${q.max_concurrent} active · ${q.queued} queued</span>
+      const qColor = qPct > 80 ? 'var(--red)' : qPct > 50 ? 'var(--yellow)' : 'var(--green)';
+      queueLine = `<div class="meta" style="margin-top:2px;display:flex;align-items:center;gap:8px;">
+        <span style="color:var(--muted);">Queue</span>
+        <div style="flex:1;max-width:120px;height:8px;background:var(--surface);border-radius:3px;overflow:hidden;">
+          <div style="width:${qPct}%;height:100%;background:${qColor};border-radius:3px;transition:width .3s;"></div>
+        </div>
+        <span style="font-size:11px;color:var(--text);font-variant-numeric:tabular-nums;">${q.active}/${q.max_concurrent} active · ${q.queued} queued</span>
       </div>`;
     }
 

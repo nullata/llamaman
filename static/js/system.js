@@ -3,9 +3,6 @@
 // -------------------------------------------------------------------------
 // System info (CPU & RAM)
 // -------------------------------------------------------------------------
-function gpuProgressToneClass(pct) {
-  return pct > 90 ? 'progress-tone-danger' : pct > 70 ? 'progress-tone-warning' : 'progress-tone-success';
-}
 
 async function loadSystemInfo() {
   try {
@@ -15,13 +12,15 @@ async function loadSystemInfo() {
     const res = await apiFetch('/api/system-info');
     const d = await res.json();
     if (d.error) return;
-    card.hidden = false;
+    card.style.display = '';
 
     const coresLabel = document.getElementById('system-cores');
     coresLabel.textContent = `${d.cpu_cores} cores`;
 
     const cpuPct = Math.round(d.cpu_percent);
     const ramPct = Math.round(d.ram_percent);
+    const cpuColor = cpuPct > 90 ? 'var(--red)' : cpuPct > 70 ? 'var(--yellow)' : 'var(--green)';
+    const ramColor = ramPct > 90 ? 'var(--red)' : ramPct > 70 ? 'var(--yellow)' : 'var(--green)';
 
     const ramUsedGB = (d.ram_used_mb / 1024).toFixed(1);
     const ramTotalGB = (d.ram_total_mb / 1024).toFixed(1);
@@ -29,12 +28,16 @@ async function loadSystemInfo() {
     container.innerHTML = `
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">CPU</span>
-        ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(cpuPct), percent: cpuPct })}
+        <div class="gpu-bar-track">
+          <div class="gpu-bar-fill" style="width:${cpuPct}%;background:${cpuColor};"></div>
+        </div>
         <span class="gpu-bar-text">${cpuPct}%</span>
       </div>
       <div class="gpu-bar-row">
         <span class="gpu-bar-label">RAM</span>
-        ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(ramPct), percent: ramPct })}
+        <div class="gpu-bar-track">
+          <div class="gpu-bar-fill" style="width:${ramPct}%;background:${ramColor};"></div>
+        </div>
         <span class="gpu-bar-text">${ramUsedGB} / ${ramTotalGB} GB (${ramPct}%)</span>
       </div>
     `;
@@ -60,27 +63,33 @@ async function loadGpuInfo() {
       return;
     }
 
-    card.hidden = false;
+    card.style.display = '';
     hideGpuWarning();
     container.innerHTML = '';
 
     data.gpus.forEach(gpu => {
       const vramPct = Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100);
+      const vramColor = vramPct > 90 ? 'var(--red)' : vramPct > 70 ? 'var(--yellow)' : 'var(--green)';
       const corePct = gpu.utilization_pct ?? 0;
+      const coreColor = corePct > 90 ? 'var(--red)' : corePct > 70 ? 'var(--yellow)' : 'var(--green)';
       const row = document.createElement('div');
       row.className = 'gpu-bar-row';
       row.innerHTML = `
         <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index}</span>
-        <div class="gpu-bar-stack">
-          <div class="gpu-bar-subrow">
-            <span class="gpu-bar-subrow-label">core</span>
-            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(corePct), percent: corePct })}
-            <span class="gpu-bar-subtext">${corePct}%</span>
+        <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.75em;width:3em;color:var(--muted);">core</span>
+            <div class="gpu-bar-track" style="flex:1;">
+              <div class="gpu-bar-fill" style="width:${corePct}%;background:${coreColor};"></div>
+            </div>
+            <span class="gpu-bar-text" style="width:3.5em;">${corePct}%</span>
           </div>
-          <div class="gpu-bar-subrow">
-            <span class="gpu-bar-subrow-label">VRAM</span>
-            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(vramPct), percent: vramPct })}
-            <span class="gpu-bar-subtext">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="font-size:0.75em;width:3em;color:var(--muted);">VRAM</span>
+            <div class="gpu-bar-track" style="flex:1;">
+              <div class="gpu-bar-fill" style="width:${vramPct}%;background:${vramColor};"></div>
+            </div>
+            <span class="gpu-bar-text" style="width:3.5em;">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
           </div>
         </div>
       `;
@@ -88,7 +97,7 @@ async function loadGpuInfo() {
     });
   } catch (e) {
     const card = document.getElementById('gpu-vram-card');
-    if (card) card.hidden = true;
+    if (card) card.style.display = 'none';
     showGpuWarning();
   }
 }
