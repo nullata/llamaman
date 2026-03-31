@@ -33,8 +33,8 @@ setInterval(pollDownloads, 3000);
 // System info refresh (every 10s)
 setInterval(loadSystemInfo, 10000);
 
-// GPU VRAM refresh (every 15s)
-setInterval(loadGpuInfo, 15000);
+// GPU VRAM refresh (every 10s)
+setInterval(loadGpuInfo, 10000);
 
 // Cleanup metadata refresh (every 60s)
 setInterval(refreshCleanupLastRan, 60000);
