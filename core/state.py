@@ -124,6 +124,7 @@ def adopt_orphans() -> int:
             "proxy_sampling_temperature": preset.get("proxy_sampling_temperature", 0.8),
             "proxy_sampling_top_k": preset.get("proxy_sampling_top_k", 40),
             "proxy_sampling_top_p": preset.get("proxy_sampling_top_p", 0.95),
+            "proxy_sampling_presence_penalty": preset.get("proxy_sampling_presence_penalty", 0.0),
         }
 
         inst_id = str(uuid.uuid4())

@@ -277,6 +277,7 @@ def _ensure_model_running(
             proxy_sampling_temperature=float(preset.get("proxy_sampling_temperature", 0.8)),
             proxy_sampling_top_k=int(preset.get("proxy_sampling_top_k", 40)),
             proxy_sampling_top_p=float(preset.get("proxy_sampling_top_p", 0.95)),
+            proxy_sampling_presence_penalty=float(preset.get("proxy_sampling_presence_penalty", 0.0)),
         )
         if err:
             return None, err
@@ -448,6 +449,8 @@ def _translate_to_openai(body: dict) -> dict:
         openai_body["top_k"] = opts["top_k"]
     if "top_p" in opts:
         openai_body["top_p"] = opts["top_p"]
+    if "presence_penalty" in opts:
+        openai_body["presence_penalty"] = opts["presence_penalty"]
     if "seed" in opts:
         openai_body["seed"] = opts["seed"]
     if "stop" in opts:
@@ -455,7 +458,7 @@ def _translate_to_openai(body: dict) -> dict:
     if "num_predict" in opts:
         openai_body["max_tokens"] = opts["num_predict"]
 
-    for key in ("temperature", "top_k", "top_p", "seed", "stop", "max_tokens"):
+    for key in ("temperature", "top_k", "top_p", "presence_penalty", "seed", "stop", "max_tokens"):
         if key in body and key not in openai_body:
             openai_body[key] = body[key]
 

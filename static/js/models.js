@@ -220,6 +220,7 @@ async function selectModel(model, el) {
       document.getElementById('f-proxy-sampling-temperature').value = p.proxy_sampling_temperature ?? 0.8;
       document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
       document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
+      document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
       if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
       toast('Preset loaded', 'info');
     }

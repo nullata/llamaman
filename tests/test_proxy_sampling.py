@@ -41,6 +41,7 @@ class ProxySamplingTests(unittest.TestCase):
                     "proxy_sampling_temperature": 0.65,
                     "proxy_sampling_top_k": 25,
                     "proxy_sampling_top_p": 0.9,
+                    "proxy_sampling_presence_penalty": 0.4,
                 },
             )
 
@@ -51,6 +52,47 @@ class ProxySamplingTests(unittest.TestCase):
         self.assertEqual(saved_preset["proxy_sampling_temperature"], 0.65)
         self.assertEqual(saved_preset["proxy_sampling_top_k"], 25)
         self.assertEqual(saved_preset["proxy_sampling_top_p"], 0.9)
+        self.assertEqual(saved_preset["proxy_sampling_presence_penalty"], 0.4)
+
+    def test_preset_save_rejects_temperature_above_upper_bound(self):
+        app = Flask(__name__)
+        app.register_blueprint(presets_api.bp)
+        client = app.test_client()
+
+        resp = client.put(
+            "/api/presets/models/chat.gguf",
+            json={
+                "ctx_size": 4096,
+                "proxy_sampling_override_enabled": True,
+                "proxy_sampling_temperature": 2.5,
+            },
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.get_json()["error"],
+            "proxy_sampling_temperature must be >= 0 and <= 2",
+        )
+
+    def test_preset_save_rejects_presence_penalty_above_upper_bound(self):
+        app = Flask(__name__)
+        app.register_blueprint(presets_api.bp)
+        client = app.test_client()
+
+        resp = client.put(
+            "/api/presets/models/chat.gguf",
+            json={
+                "ctx_size": 4096,
+                "proxy_sampling_override_enabled": True,
+                "proxy_sampling_presence_penalty": 2.5,
+            },
+        )
+
+        self.assertEqual(resp.status_code, 400)
+        self.assertEqual(
+            resp.get_json()["error"],
+            "proxy_sampling_presence_penalty must be >= -2 and <= 2",
+        )
 
     @patch("api.instances.save_state")
     @patch("api.instances.start_idle_proxy")
@@ -79,6 +121,7 @@ class ProxySamplingTests(unittest.TestCase):
             proxy_sampling_temperature=0.55,
             proxy_sampling_top_k=17,
             proxy_sampling_top_p=0.88,
+            proxy_sampling_presence_penalty=0.25,
         )
 
         self.assertIsNone(err)
@@ -88,6 +131,7 @@ class ProxySamplingTests(unittest.TestCase):
         self.assertEqual(inst["config"]["proxy_sampling_temperature"], 0.55)
         self.assertEqual(inst["config"]["proxy_sampling_top_k"], 17)
         self.assertEqual(inst["config"]["proxy_sampling_top_p"], 0.88)
+        self.assertEqual(inst["config"]["proxy_sampling_presence_penalty"], 0.25)
         start_idle_proxy_mock.assert_called_once_with(inst["id"], 8000, 9001)
 
     @patch("api.llamaman.get_gate", return_value=None)
@@ -112,6 +156,7 @@ class ProxySamplingTests(unittest.TestCase):
                 "proxy_sampling_temperature": 0.3,
                 "proxy_sampling_top_k": 7,
                 "proxy_sampling_top_p": 0.72,
+                "proxy_sampling_presence_penalty": -0.4,
             },
         }, None)
         proxy_non_streaming_mock.return_value = {
@@ -129,6 +174,7 @@ class ProxySamplingTests(unittest.TestCase):
                 "temperature": 1.1,
                 "top_k": 99,
                 "top_p": 0.12,
+                "presence_penalty": 1.3,
             },
         )
 
@@ -137,6 +183,7 @@ class ProxySamplingTests(unittest.TestCase):
         self.assertEqual(forwarded_body["temperature"], 0.3)
         self.assertEqual(forwarded_body["top_k"], 7)
         self.assertEqual(forwarded_body["top_p"], 0.72)
+        self.assertEqual(forwarded_body["presence_penalty"], -0.4)
 
 
 if __name__ == "__main__":

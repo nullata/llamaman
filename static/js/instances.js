@@ -218,6 +218,7 @@ function updateProxySamplingOverrideState() {
     'f-proxy-sampling-temperature',
     'f-proxy-sampling-top-k',
     'f-proxy-sampling-top-p',
+    'f-proxy-sampling-presence-penalty',
   ].forEach((id) => {
     const input = document.getElementById(id);
     if (input) input.disabled = !enabled;
@@ -254,15 +255,19 @@ function readLaunchForm() {
     proxy_sampling_temperature: parseFloat(document.getElementById('f-proxy-sampling-temperature').value),
     proxy_sampling_top_k: parseInt(document.getElementById('f-proxy-sampling-top-k').value, 10),
     proxy_sampling_top_p: parseFloat(document.getElementById('f-proxy-sampling-top-p').value),
+    proxy_sampling_presence_penalty: parseFloat(document.getElementById('f-proxy-sampling-presence-penalty').value),
   };
-  if (!Number.isFinite(body.proxy_sampling_temperature) || body.proxy_sampling_temperature < 0) {
-    throw new Error('Proxy-side temperature must be 0 or greater');
+  if (!Number.isFinite(body.proxy_sampling_temperature) || body.proxy_sampling_temperature < 0 || body.proxy_sampling_temperature > 2) {
+    throw new Error('Proxy-side temperature must be between 0 and 2');
   }
   if (!Number.isInteger(body.proxy_sampling_top_k) || body.proxy_sampling_top_k < 0) {
     throw new Error('Proxy-side top k must be an integer >= 0');
   }
   if (!Number.isFinite(body.proxy_sampling_top_p) || body.proxy_sampling_top_p <= 0 || body.proxy_sampling_top_p > 1) {
     throw new Error('Proxy-side top p must be greater than 0 and no more than 1');
+  }
+  if (!Number.isFinite(body.proxy_sampling_presence_penalty) || body.proxy_sampling_presence_penalty < -2 || body.proxy_sampling_presence_penalty > 2) {
+    throw new Error('Proxy-side presence penalty must be between -2 and 2');
   }
   const threads = document.getElementById('f-threads').value.trim();
   if (threads) body.threads = parseInt(threads);

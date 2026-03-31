@@ -187,7 +187,7 @@
                   <div class="launch-inline-settings-grid">
                     <div class="form-group">
                       <label for="f-proxy-sampling-temperature">Temperature</label>
-                      <input id="f-proxy-sampling-temperature" class="launch-settings-input" type="number" value="0.8" min="0" step="0.01" />
+                      <input id="f-proxy-sampling-temperature" class="launch-settings-input" type="number" value="0.8" min="0" max="2" step="0.01" />
                     </div>
                     <div class="form-group">
                       <label for="f-proxy-sampling-top-k">Top K</label>
@@ -196,6 +196,10 @@
                     <div class="form-group">
                       <label for="f-proxy-sampling-top-p">Top P</label>
                       <input id="f-proxy-sampling-top-p" class="launch-settings-input" type="number" value="0.95" min="0.01" max="1" step="0.01" />
+                    </div>
+                    <div class="form-group">
+                      <label for="f-proxy-sampling-presence-penalty">Presence Penalty</label>
+                      <input id="f-proxy-sampling-presence-penalty" class="launch-settings-input" type="number" value="0.0" min="-2" max="2" step="0.01" />
                     </div>
                   </div>
                 </div>
