@@ -67,24 +67,18 @@ async function loadGpuInfo() {
     data.gpus.forEach(gpu => {
       const vramPct = Math.round((gpu.memory_used_mb / gpu.memory_total_mb) * 100);
       const corePct = gpu.utilization_pct ?? 0;
-      const row = document.createElement('div');
-      row.className = 'gpu-bar-row';
-      row.innerHTML = `
-        <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index}</span>
-        <div class="gpu-bar-stack">
-          <div class="gpu-bar-subrow">
-            <span class="gpu-bar-subrow-label">core</span>
-            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(corePct), percent: corePct })}
-            <span class="gpu-bar-subtext">${corePct}%</span>
-          </div>
-          <div class="gpu-bar-subrow">
-            <span class="gpu-bar-subrow-label">VRAM</span>
-            ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(vramPct), percent: vramPct })}
-            <span class="gpu-bar-subtext">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
-          </div>
+      container.insertAdjacentHTML('beforeend', `
+        <div class="gpu-bar-row">
+          <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index} core</span>
+          ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(corePct), percent: corePct })}
+          <span class="gpu-bar-text">${corePct}%</span>
         </div>
-      `;
-      container.appendChild(row);
+        <div class="gpu-bar-row">
+          <span class="gpu-bar-label" title="${escHtml(gpu.name)}">GPU ${gpu.index} VRAM</span>
+          ${renderMeterSvg({ meterClass: 'gpu-bar-meter', toneClass: gpuProgressToneClass(vramPct), percent: vramPct })}
+          <span class="gpu-bar-text">${gpu.memory_used_mb} / ${gpu.memory_total_mb} MB</span>
+        </div>
+      `);
     });
   } catch (e) {
     const card = document.getElementById('gpu-vram-card');
