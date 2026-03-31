@@ -12,7 +12,6 @@ async function loadSystemInfo() {
     const res = await apiFetch('/api/system-info');
     const d = await res.json();
     if (d.error) return;
-    card.style.display = '';
 
     const coresLabel = document.getElementById('system-cores');
     coresLabel.textContent = `${d.cpu_cores} cores`;
@@ -58,12 +57,11 @@ async function loadGpuInfo() {
     const data = await res.json();
 
     if (!data.gpus || data.gpus.length === 0) {
-      card.hidden = true;
+      card.style.display = 'none';
       showGpuWarning();
       return;
     }
 
-    card.style.display = '';
     hideGpuWarning();
     container.innerHTML = '';
 
