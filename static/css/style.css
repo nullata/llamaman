@@ -670,8 +670,11 @@ select option {
 
 .gpu-bar-progress,
 .instance-queue-progress {
+  --progress-fill: var(--accent);
   appearance: none;
   -webkit-appearance: none;
+  accent-color: var(--progress-fill);
+  color: var(--progress-fill);
   border: none;
   background: var(--surface);
   border-radius: 3px;
@@ -695,22 +698,24 @@ select option {
   background: var(--surface);
 }
 
-.progress-tone-success::-webkit-progress-value,
-.progress-tone-success::-moz-progress-bar {
-  background: var(--green);
+.gpu-bar-progress::-webkit-progress-value,
+.instance-queue-progress::-webkit-progress-value,
+.gpu-bar-progress::-moz-progress-bar,
+.instance-queue-progress::-moz-progress-bar {
+  background: var(--progress-fill);
   border-radius: 3px;
 }
 
-.progress-tone-warning::-webkit-progress-value,
-.progress-tone-warning::-moz-progress-bar {
-  background: var(--yellow);
-  border-radius: 3px;
+.progress-tone-success {
+  --progress-fill: var(--accent);
 }
 
-.progress-tone-danger::-webkit-progress-value,
-.progress-tone-danger::-moz-progress-bar {
-  background: var(--red);
-  border-radius: 3px;
+.progress-tone-warning {
+  --progress-fill: var(--yellow);
+}
+
+.progress-tone-danger {
+  --progress-fill: var(--red);
 }
 
 /* ---- Sidebar Downloads Section ---- */
