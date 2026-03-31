@@ -9,7 +9,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Model library** - scans `/models` for GGUF files, shows quant type and file size
 - **One-click launch** - configure GPU layers, context size, threads, multi-GPU, extra args
 - **Preset configs** - save/load per-model launch settings
-- **Download manager** - pull models from HuggingFace with speed throttling
+- **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU usage bars via nvidia-smi or rocm-smi
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
@@ -18,6 +18,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Require auth toggle** - enforce bearer token authentication on all endpoints (including model loading) or leave model endpoints open
 - **Persistent state** - instance history and configs survive container restarts
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
+- **Proxy sampling overrides** - force temperature, top-k, top-p, and presence penalty on all proxied requests, configurable per model preset
 
 ## Tags
 

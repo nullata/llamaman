@@ -11,7 +11,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Model library** - scans `/models` for GGUF files, shows quant type and file size
 - **One-click launch** - configure GPU layers, context size, threads, multi-GPU, extra args
 - **Preset configs** - save/load per-model launch settings
-- **Download manager** - pull models from HuggingFace with speed throttling
+- **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU usage bars via nvidia-smi or rocm-smi
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
@@ -20,6 +20,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Require auth toggle** - enforce bearer token authentication on all endpoints (including model loading) or leave model endpoints open
 - **Persistent state** - instance history and configs survive container restarts
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
+- **Proxy sampling overrides** - force temperature, top-k, top-p, and presence penalty on all proxied requests, configurable per model preset
 
 ## Requirements
 
@@ -126,6 +127,11 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Embedding Model** | off | Marks the instance as an embedding model. Embedding instances are **excluded** from the `LLAMAMAN_MAX_MODELS` count and will never be evicted by the proxy's LRU policy. |
 | **GPU Devices** | `0` | Comma-separated GPU indices for multi-GPU setups (e.g. `0,1`). |
 | **Extra Args** | _(empty)_ | Additional flags passed directly to llama-server (e.g. `--flash-attn`). |
+| **Proxy Sampling Overrides** | off | When enabled, the proxy forces the configured sampling parameters on every request forwarded to this instance, regardless of what the client sends. |
+| **Temperature** | `0.8` | Sampling temperature to enforce (range: `0.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
+| **Top K** | `40` | Top-k sampling value to enforce (min: `0`). Only active when proxy sampling overrides are enabled. |
+| **Top P** | `0.95` | Top-p (nucleus) sampling value to enforce (range: `0.01`–`1.0`). Only active when proxy sampling overrides are enabled. |
+| **Presence Penalty** | `0.0` | Presence penalty to enforce (range: `-2.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
 
 ### Concurrency and queueing
 
@@ -145,6 +151,13 @@ Set **Idle Timeout min** in the launch form (0 = disabled). When enabled:
 - Client sees the same port/API with just a cold-start delay
 
 For instances managed by the llamaman proxy (OpenWebUI), use the `LLAMAMAN_IDLE_TIMEOUT` env var instead.
+
+## Download Settings
+
+The UI provides download-related options under **Settings >> Download Settings**:
+
+- **Auto-retry failed downloads** - automatically retries downloads that fail due to network errors or interruptions. Off by default.
+- **Retry count per failed download** - how many times to retry before marking a download as permanently failed (default: 3, min: 1). Only active when auto-retry is enabled.
 
 ## Cleanup Settings
 
@@ -307,7 +320,12 @@ All endpoints return and accept JSON.
   "idle_timeout_min": 0,
   "max_concurrent": 0,
   "max_queue_depth": 200,
-  "share_queue": false
+  "share_queue": false,
+  "proxy_sampling_override_enabled": false,
+  "proxy_sampling_temperature": 0.8,
+  "proxy_sampling_top_k": 40,
+  "proxy_sampling_top_p": 0.95,
+  "proxy_sampling_presence_penalty": 0.0
 }
 ```
 
@@ -339,7 +357,7 @@ Leave `filename` blank to download the full repository.
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/models` | List discovered models in `MODELS_DIR` |
+| `GET` | `/api/models` | List discovered models in `MODELS_DIR` (includes `repo_id` when source is known) |
 | `POST` | `/api/models/delete` | Delete a model from disk (`{"path": "/models/..."}`) |
 | `GET` | `/api/model-layers?path=<path>` | Read layer count from GGUF metadata |
 | `GET` | `/api/disk-space` | Free/used space on the models volume |
@@ -366,6 +384,8 @@ Leave `filename` blank to download the full repository.
   "require_auth": true,
   "admin_ui_enforce_max_models": false,
   "allow_ollama_api_override_admin": false,
+  "auto_retry_failed_downloads": false,
+  "retry_count_per_failed_download": 3,
   "cleanup": {
     "downloads_enabled": true,
     "downloads_max_age_hours": 24,
