@@ -16,7 +16,7 @@ The KV cache stores attention keys and values across all tokens in the context w
 
 ## Building
 
-TurboQuant+ is not yet in mainline llama.cpp. The Metal/CPU implementation lives in `TheTom/llama-cpp-turboquant`; CUDA support is maintained separately in `signalnine/llama-cpp-turboquant-cuda`. A dedicated Dockerfile is included that compiles llama-server from the CUDA fork:
+TurboQuant+ is not yet in mainline llama.cpp. The turbo cache types and CUDA kernels live on the `feature/turboquant-kv-cache` branch of `TheTom/llama-cpp-turboquant`. A dedicated Dockerfile is included that compiles llama-server from that branch:
 
 ```bash
 docker build -f Dockerfile.turboquant -t llamaman-turboquant .
