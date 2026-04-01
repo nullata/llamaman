@@ -245,6 +245,8 @@ function readLaunchForm() {
     n_gpu_layers: parseInt(document.getElementById('f-gpu-layers').value),
     ctx_size: ctxSize,
     extra_args: document.getElementById('f-extra').value.trim(),
+    cache_type_k: document.getElementById('f-cache-type-k').value,
+    cache_type_v: document.getElementById('f-cache-type-v').value,
     gpu_devices: document.getElementById('f-gpu-devices').value.trim(),
     idle_timeout_min: parseInt(document.getElementById('f-idle-timeout').value) || 0,
     max_concurrent: parseInt(document.getElementById('f-max-concurrent').value) || 0,

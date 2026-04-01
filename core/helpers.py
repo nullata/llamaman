@@ -63,6 +63,10 @@ def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
         cmd += ["--threads", str(int(config["threads"]))]
     if config.get("parallel"):
         cmd += ["--parallel", str(int(config["parallel"]))]
+    if config.get("cache_type_k"):
+        cmd += ["--cache-type-k", config["cache_type_k"]]
+    if config.get("cache_type_v"):
+        cmd += ["--cache-type-v", config["cache_type_v"]]
     if config.get("extra_args"):
         cmd += shlex.split(config["extra_args"])
     return cmd
@@ -202,6 +206,8 @@ def _parse_llama_cmdline(pid: int) -> dict | None:
             "threads": threads,
             "parallel": parallel,
             "extra_args": "",
+            "cache_type_k": "",
+            "cache_type_v": "",
             "gpu_devices": None,
             "idle_timeout_min": 0,
             "max_concurrent": 0,

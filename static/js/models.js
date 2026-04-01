@@ -210,6 +210,8 @@ async function selectModel(model, el) {
       document.getElementById('f-threads').value = p.threads || '';
       document.getElementById('f-parallel').value = p.parallel || '';
       document.getElementById('f-extra').value = p.extra_args || '';
+      document.getElementById('f-cache-type-k').value = p.cache_type_k || '';
+      document.getElementById('f-cache-type-v').value = p.cache_type_v || '';
       document.getElementById('f-gpu-devices').value = p.gpu_devices || '';
       document.getElementById('f-idle-timeout').value = p.idle_timeout_min || 0;
       document.getElementById('f-max-concurrent').value = p.max_concurrent || 0;
