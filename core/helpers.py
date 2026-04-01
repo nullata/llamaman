@@ -63,6 +63,8 @@ def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
         cmd += ["--threads", str(int(config["threads"]))]
     if config.get("parallel"):
         cmd += ["--parallel", str(int(config["parallel"]))]
+    if config.get("embedding_model"):
+        cmd += ["--embeddings"]
     if config.get("extra_args"):
         cmd += shlex.split(config["extra_args"])
     return cmd

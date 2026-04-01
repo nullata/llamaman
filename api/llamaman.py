@@ -668,6 +668,9 @@ def _handle_request(mode: str = "chat"):
         code = 503 if "model limit reached" in err else 500
         return jsonify({"error": err}), code
 
+    if inst.get("config", {}).get("embedding_model"):
+        return jsonify({"error": f"model '{model_name}' is embedding-only and cannot handle chat completions"}), 422
+
     server_port = inst.get("_internal_port") or inst["port"]
 
     # If the model was just launched it may still be loading.  Wait for it
@@ -801,6 +804,9 @@ def llamaman_v1_chat():
     if err:
         return jsonify({"error": {"message": err}}), 503
 
+    if inst.get("config", {}).get("embedding_model"):
+        return jsonify({"error": {"message": f"model '{model_name}' is embedding-only and cannot handle chat completions"}}), 422
+
     server_port = inst.get("_internal_port") or inst["port"]
     inst_id = inst["id"]
 
@@ -876,6 +882,51 @@ def llamaman_v1_chat():
     finally:
         if gate and not stream_returned:
             gate.release()
+
+
+@bp.route("/v1/embeddings", methods=["POST"])
+def llamaman_v1_embeddings():
+    body = request.get_json(force=True)
+    model_name = body.get("model", "").strip()
+    if not model_name:
+        return jsonify({"error": {"message": "model is required"}}), 400
+
+    inst, err = _ensure_model_running(model_name, allow_eviction=False)
+    if err:
+        return jsonify({"error": {"message": err}}), 503
+
+    if not inst.get("config", {}).get("embedding_model"):
+        return jsonify({"error": {"message": f"model '{model_name}' is not configured as an embedding model"}}), 422
+
+    server_port = inst.get("_internal_port") or inst["port"]
+    inst_id = inst["id"]
+
+    if inst.get("status") != "healthy":
+        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+            return jsonify({"error": {"message": "model launched but did not become healthy in time"}}), 500
+        with instances_lock:
+            if inst_id in instances:
+                instances[inst_id]["status"] = "healthy"
+
+    last_err = None
+    resp = None
+    for _attempt in range(3):
+        try:
+            resp = http_requests.post(
+                f"http://localhost:{server_port}/v1/embeddings",
+                json=body,
+                timeout=REQUEST_TIMEOUT,
+            )
+            break
+        except (http_requests.ConnectionError, http_requests.Timeout,
+                ConnectionRefusedError) as e:
+            last_err = e
+            time.sleep(2)
+    if resp is None:
+        return jsonify({"error": {"message": str(last_err)}}), 502
+
+    _touch_instance(inst_id)
+    return jsonify(resp.json()), resp.status_code
 
 
 def _touch_instance(inst_id: str):
