@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-venv curl libcublas-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/build/bin/llama-server /app/llama-server
+COPY --from=builder /build/build/bin/ /app/
 RUN chmod +x /app/llama-server
 
 WORKDIR /app
