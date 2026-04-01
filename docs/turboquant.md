@@ -58,3 +58,8 @@ TurboQuant+ works with flash attention. Add `--flash-attn` to Extra Args for add
 - Validated on CUDA (RTX 3090, 4090, 5090) and Apple Silicon (Metal)
 - Works with Llama, Qwen, Mistral, Command-R, and Phi model families
 - Standard `q8_0`, `q4_0`, and `f16` cache types continue to work on the TurboQuant image
+
+## Tested models
+- GLM-4.7-Flash-UD-Q8_K_XL
+- Qwen3.5-35B-A3B-GGUF
+- TBA
