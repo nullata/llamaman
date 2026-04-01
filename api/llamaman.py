@@ -195,7 +195,7 @@ def _ensure_model_running(
 
     allow_eviction controls whether LRU eviction may be used to free a slot.
     The Ollama API sets this True; the OpenAI API sets it False so it never
-    displaces a running model — it either finds a free slot or returns 503.
+    displaces a running model - it either finds a free slot or returns 503.
     """
     from api.instances import (
         launch_instance, relaunch_inactive_instance, wait_for_healthy,
@@ -240,7 +240,7 @@ def _ensure_model_running(
                     "admin-launched models cannot be evicted via the API"
                 )
         else:
-            # OpenAI API: never evict — only proceed if there is already room.
+            # OpenAI API: never evict - only proceed if there is already room.
             if not incoming_embedding_model and LLAMAMAN_MAX_MODELS > 0:
                 if _count_running_instances() >= LLAMAMAN_MAX_MODELS:
                     return None, (

@@ -12,11 +12,11 @@ The KV cache stores attention keys and values across all tokens in the context w
 | `turbo3` | 3.5 | 4.6x | +1.06% PPL |
 | `turbo2` | 2.5 | 6.4x | +6.48% PPL |
 
-`turbo4` is the recommended starting point — better quality than `q4_0` at better compression, and within 0.23% of `q8_0`.
+`turbo4` is the recommended starting point - better quality than `q4_0` at better compression, and within 0.23% of `q8_0`.
 
 ## Building
 
-TurboQuant+ is not yet in mainline llama.cpp. A dedicated Dockerfile is included that compiles llama-server from the fork with CUDA support:
+TurboQuant+ is not yet in mainline llama.cpp. The Metal/CPU implementation lives in `TheTom/llama-cpp-turboquant`; CUDA support is maintained separately in `signalnine/llama-cpp-turboquant-cuda`. A dedicated Dockerfile is included that compiles llama-server from the CUDA fork:
 
 ```bash
 docker build -f Dockerfile.turboquant -t llamaman-turboquant .
@@ -31,9 +31,9 @@ Once running on the TurboQuant image, set **KV Cache Type K** and **KV Cache Typ
 
 **Recommended configs:**
 
-- **Best quality:** `-ctk turbo4 -ctv turbo4` — nearly identical to q8_0, 3.8x compression
-- **Maximum compression:** `-ctk q8_0 -ctv turbo3` — keep K at full precision, compress V aggressively
-- **Extreme memory pressure:** `-ctk q8_0 -ctv turbo2` — combine with boundary-layer protection (automatic on recent builds)
+- **Best quality:** `-ctk turbo4 -ctv turbo4` - nearly identical to q8_0, 3.8x compression
+- **Maximum compression:** `-ctk q8_0 -ctv turbo3` - keep K at full precision, compress V aggressively
+- **Extreme memory pressure:** `-ctk q8_0 -ctv turbo2` - combine with boundary-layer protection (automatic on recent builds)
 
 **For low-bit weight models (Q4_K_M):** symmetric turbo can degrade quality on some models. Use asymmetric K/V instead:
 
@@ -45,7 +45,7 @@ This is safe for most Q4_K_M models. Larger models (70B+) generally absorb symme
 
 ## Asymmetric K/V
 
-K and V compression are independent. K controls attention routing via softmax and is the dominant quality factor — compressing it too aggressively causes most of the quality loss. V compression is effectively free at any precision when K is maintained.
+K and V compression are independent. K controls attention routing via softmax and is the dominant quality factor - compressing it too aggressively causes most of the quality loss. V compression is effectively free at any precision when K is maintained.
 
 This means you can usually set V to `turbo2` or `turbo3` while keeping K at `q8_0` and see almost no quality change, recovering the majority of the VRAM savings.
 
