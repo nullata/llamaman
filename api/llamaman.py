@@ -267,6 +267,8 @@ def _ensure_model_running(
             threads=preset.get("threads"),
             parallel=preset.get("parallel"),
             extra_args=preset.get("extra_args", ""),
+            cache_type_k=preset.get("cache_type_k", ""),
+            cache_type_v=preset.get("cache_type_v", ""),
             gpu_devices=preset.get("gpu_devices") or None,
             idle_timeout_min=preset.get("idle_timeout_min", 0),
             max_concurrent=preset.get("max_concurrent", 0),

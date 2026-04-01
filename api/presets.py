@@ -56,6 +56,8 @@ def api_preset_save(model_path):
         "threads": body.get("threads"),
         "parallel": body.get("parallel"),
         "extra_args": body.get("extra_args", ""),
+        "cache_type_k": body.get("cache_type_k", ""),
+        "cache_type_v": body.get("cache_type_v", ""),
         "gpu_devices": body.get("gpu_devices", ""),
         "idle_timeout_min": body.get("idle_timeout_min", 0),
         "max_concurrent": body.get("max_concurrent", 0),
