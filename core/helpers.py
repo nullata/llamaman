@@ -67,6 +67,8 @@ def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
         cmd += ["--cache-type-k", config["cache_type_k"]]
     if config.get("cache_type_v"):
         cmd += ["--cache-type-v", config["cache_type_v"]]
+    if config.get("embedding_model"):
+        cmd += ["--embeddings"]
     if config.get("extra_args"):
         cmd += shlex.split(config["extra_args"])
     return cmd
