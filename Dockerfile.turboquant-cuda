@@ -10,10 +10,12 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /build
 RUN git clone --depth=1 https://github.com/TheTom/llama-cpp-turboquant .
 
-RUN cmake -B build \
-    -DGGML_CUDA=ON \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120" \
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && cmake -B build \
+        -DGGML_CUDA=ON \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120" \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/usr/local/cuda/lib64/stubs" \
     && cmake --build build --config Release -j$(nproc) --target llama-server
 
 # Stage 2: Runtime image
