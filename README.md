@@ -434,6 +434,10 @@ Leave `filename` blank to download the full repository.
 | OpenWebUI gets 401 errors | `require_auth` is on (default). Create an API key in the UI and set `OPENAI_API_KEYS` in OpenWebUI's environment. |
 | _"API key required"_ on all requests | Either create an API key, or turn off the "Require authentication" toggle in the API Keys section. |
 
+## Credits
+
+This work would not be possible without the work of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
+
 ## License
 
 LlamaMan is licensed under the [Elastic License 2.0](LICENSE). You may use, copy, distribute, and modify the software, subject to the following limitations:
