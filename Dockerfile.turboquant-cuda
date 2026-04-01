@@ -1,5 +1,5 @@
 # Stage 1: Build llama-server from TurboQuant+ fork with CUDA support
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -13,16 +13,16 @@ RUN git clone --depth=1 https://github.com/TheTom/llama-cpp-turboquant .
 RUN cmake -B build \
     -DGGML_CUDA=ON \
     -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_CUDA_ARCHITECTURES=all-major \
+    -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90;120" \
     && cmake --build build --config Release -j$(nproc) --target llama-server
 
 # Stage 2: Runtime image
-FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    python3 python3-pip python3-venv curl libcublas-12-4 \
+    python3 python3-pip python3-venv curl libcublas-12-8 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/build/bin/llama-server /app/llama-server
