@@ -265,6 +265,7 @@ async function selectModel(model, el) {
   selectedModelPath = model.path;
   document.getElementById('f-model-path').value = model.path;
   document.getElementById('f-note').value = getModelNote(model.path);
+  updateLaunchFormRepoInfo(model);
   updateLaunchFormStar();
   const ctxField = document.getElementById('f-ctx-size');
   if (typeof setActiveTab === 'function') setActiveTab('settings', 'launch');
@@ -298,6 +299,19 @@ async function selectModel(model, el) {
   } catch (e) { /* no preset, use defaults */ }
   // Detect layer count for model
   await updateGpuLayersTotal(model.path);
+}
+
+function updateLaunchFormRepoInfo(model) {
+  const el = document.getElementById('f-repo-info');
+  if (!el) return;
+  if (model && model.repo_id) {
+    const repoId = escHtml(model.repo_id);
+    el.innerHTML = `<i class="fa-solid fa-cube" style="margin-right:4px"></i><a href="https://huggingface.co/${encodeURI(model.repo_id)}" target="_blank" rel="noopener" title="${repoId}">${repoId}</a>`;
+    el.hidden = false;
+  } else {
+    el.innerHTML = '';
+    el.hidden = true;
+  }
 }
 
 function updateLaunchFormStar() {
