@@ -50,6 +50,8 @@ def api_preset_save(model_path):
     proxy_sampling_config, proxy_sampling_err = parse_proxy_sampling_config(body)
     if proxy_sampling_err:
         return jsonify({"error": proxy_sampling_err}), 400
+    # Preserve existing meta fields (favorite, note) that aren't part of the launch form
+    existing = get_storage().get_preset(model_path) or {}
     data = {
         "n_gpu_layers": body.get("n_gpu_layers", -1),
         "ctx_size": ctx_size,
@@ -62,9 +64,26 @@ def api_preset_save(model_path):
         "max_queue_depth": body.get("max_queue_depth", 200),
         "share_queue": body.get("share_queue", False),
         "embedding_model": body.get("embedding_model", False),
+        "favorite": body.get("favorite", existing.get("favorite", False)),
+        "note": body.get("note", existing.get("note", "")),
         **proxy_sampling_config,
     }
     get_storage().save_preset(model_path, data)
+    return jsonify({"status": "saved"})
+
+
+@bp.route("/api/presets/<path:model_path>", methods=["PATCH"])
+def api_preset_patch(model_path):
+    """Partially update preset fields (e.g. favorite, note) without requiring a full preset."""
+    model_path = _normalize_model_path(model_path)
+    body = request.get_json(force=True)
+    storage = get_storage()
+    preset = storage.get_preset(model_path) or {}
+    allowed = {"favorite", "note"}
+    for key in allowed:
+        if key in body:
+            preset[key] = body[key]
+    storage.save_preset(model_path, preset)
     return jsonify({"status": "saved"})
 
 

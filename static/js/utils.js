@@ -56,6 +56,10 @@ function setActiveTab(group, tab) {
     panel.hidden = panel.dataset.tabPanel !== tab;
   });
 
+  // Show/hide the favorite star button only on the launch tab
+  const starBtn = root.querySelector('.settings-tab-star');
+  if (starBtn) starBtn.hidden = tab !== 'launch';
+
   saveTabState(group, tab);
 }
 
