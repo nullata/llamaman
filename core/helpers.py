@@ -11,6 +11,11 @@ import time
 from pathlib import Path
 
 
+def model_name_from_path(path: str) -> str:
+    """Derive a lowercase model name from a file path (stem only)."""
+    return Path(path).stem.lower()
+
+
 def is_pid_alive(pid: int) -> bool:
     """Check if a process with the given PID is still running."""
     if pid <= 0:

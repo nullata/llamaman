@@ -1,5 +1,6 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import io
 import json
 import threading
 import time
@@ -9,6 +10,7 @@ from werkzeug.serving import make_server
 from werkzeug.wrappers import Request as WerkzeugRequest
 
 from config import REQUEST_TIMEOUT, logger
+from core.helpers import model_name_from_path
 from core.proxy_sampling import PROXY_SAMPLING_PATHS, apply_proxy_sampling_overrides
 from core.state import instances, instances_lock
 
@@ -214,7 +216,47 @@ def _check_proxy_auth(environ, start_response):
     return True
 
 
-def make_proxy_app(inst_id: str, internal_port: int):
+def _extract_model_from_request(environ: dict) -> str | None:
+    """Extract the 'model' field from a JSON request body, if present.
+
+    Only inspects POST requests to inference endpoints. Buffers the body
+    so it remains available for the actual proxy forwarding.
+    """
+    if environ.get("REQUEST_METHOD", "GET").upper() != "POST":
+        return None
+    path = environ.get("PATH_INFO", "")
+    if path not in _GATED_PATHS:
+        return None
+    try:
+        body = environ["wsgi.input"].read()
+        environ["wsgi.input"] = io.BytesIO(body)  # rewind for later use
+        data = json.loads(body.decode("utf-8"))
+        return data.get("model", "").strip() or None
+    except Exception:
+        return None
+
+
+def _model_matches(inst_model_path: str, requested_model: str) -> bool:
+    """Check if a requested model name matches an instance's model path."""
+    inst_model = model_name_from_path(inst_model_path)
+    req_model = requested_model.split(":")[0].lower()
+    return req_model == inst_model or req_model in inst_model
+
+
+def _find_sleeping_instance_for_port(model_name: str, proxy_port: int) -> str | None:
+    """Find a sleeping instance on this port whose model matches the request."""
+    with instances_lock:
+        for iid, inst in instances.items():
+            if inst["status"] != "sleeping":
+                continue
+            if inst["port"] != proxy_port:
+                continue
+            if _model_matches(inst["model_path"], model_name):
+                return iid
+    return None
+
+
+def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
     """Create a WSGI app that proxies requests to the llama-server,
     waking it from sleep if necessary."""
     def proxy_app(environ, start_response):
@@ -225,6 +267,9 @@ def make_proxy_app(inst_id: str, internal_port: int):
         if _check_proxy_auth(environ, start_response):
             return [json.dumps({"error": "API key required"}).encode()]
 
+        # Extract model name from request body (for inference endpoints only)
+        requested_model = _extract_model_from_request(environ)
+
         with instances_lock:
             inst = instances.get(inst_id)
             if inst:
@@ -234,13 +279,39 @@ def make_proxy_app(inst_id: str, internal_port: int):
 
         with instances_lock:
             inst = instances.get(inst_id)
-            status = inst["status"] if inst else "stopped"
+            status = inst["status"] if inst else None
+
+        wake_id = inst_id
 
         if status in ("sleeping", "stopped"):
-            if not relaunch_inactive_instance(inst_id):
+            # If the request specifies a model, verify it matches before waking
+            if requested_model and inst:
+                if not _model_matches(inst["model_path"], requested_model):
+                    start_response("404 Not Found",
+                                   [("Content-Type", "application/json")])
+                    return [json.dumps({"error": f"model '{requested_model}' is not loaded on this port"}).encode()]
+            if not relaunch_inactive_instance(wake_id):
                 start_response("503 Service Unavailable",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "failed to wake model"}).encode()]
+        elif status is None:
+            # Instance record gone — try to find a sleeping instance by model + port
+            if requested_model:
+                found_id = _find_sleeping_instance_for_port(requested_model, proxy_port)
+                if found_id:
+                    wake_id = found_id
+                    if not relaunch_inactive_instance(wake_id):
+                        start_response("503 Service Unavailable",
+                                       [("Content-Type", "application/json")])
+                        return [json.dumps({"error": "failed to wake model"}).encode()]
+                else:
+                    start_response("503 Service Unavailable",
+                                   [("Content-Type", "application/json")])
+                    return [json.dumps({"error": "no matching sleeping model found on this port"}).encode()]
+            else:
+                start_response("503 Service Unavailable",
+                               [("Content-Type", "application/json")])
+                return [json.dumps({"error": "instance no longer exists"}).encode()]
         elif status == "starting":
             from api.instances import wait_for_healthy
             from config import MODEL_LOAD_TIMEOUT
@@ -249,7 +320,14 @@ def make_proxy_app(inst_id: str, internal_port: int):
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "model is loading but did not become healthy in time"}).encode()]
 
-        gate = get_gate(inst_id) if _is_inference_request(environ) else None
+        # Resolve the effective instance and port (may differ if wake_id changed)
+        effective_id = wake_id
+        with instances_lock:
+            effective_inst = instances.get(effective_id)
+            effective_port = (effective_inst.get("_internal_port", internal_port)
+                              if effective_inst else internal_port)
+
+        gate = get_gate(effective_id) if _is_inference_request(environ) else None
         if gate:
             if not gate.acquire(timeout=REQUEST_TIMEOUT):
                 start_response("429 Too Many Requests",
@@ -258,7 +336,7 @@ def make_proxy_app(inst_id: str, internal_port: int):
 
         try:
             req = WerkzeugRequest(environ)
-            target = f"http://localhost:{internal_port}{req.path}"
+            target = f"http://localhost:{effective_port}{req.path}"
             if req.query_string:
                 target += f"?{req.query_string.decode()}"
 
@@ -271,7 +349,7 @@ def make_proxy_app(inst_id: str, internal_port: int):
             req_data = _apply_proxy_sampling_request_overrides(
                 req_data,
                 req.path,
-                inst.get("config", {}) if inst else {},
+                effective_inst.get("config", {}) if effective_inst else {},
             )
             last_err = None
             resp = None
@@ -324,7 +402,7 @@ def make_proxy_app(inst_id: str, internal_port: int):
 
 
 def start_idle_proxy(inst_id: str, proxy_port: int, internal_port: int):
-    proxy_app = make_proxy_app(inst_id, internal_port)
+    proxy_app = make_proxy_app(inst_id, internal_port, proxy_port)
     server = make_server("0.0.0.0", proxy_port, proxy_app, threaded=True)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
