@@ -24,6 +24,7 @@ from core.helpers import (
     find_available_port,
     is_llama_pid,
     is_pid_alive,
+    model_name_from_path,
     scan_llama_server_processes,
 )
 from core.proxy_sampling import apply_proxy_sampling_overrides
@@ -42,18 +43,15 @@ _llamaman_lock = threading.Lock()
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _model_name_from_path(path: str) -> str:
-    return Path(path).stem.lower()
-
 
 def _find_model_by_name(name: str) -> dict | None:
     name_lower = name.split(":")[0].lower()
     models = discover_models(MODELS_DIR)
     for m in models:
-        if _model_name_from_path(m["path"]) == name_lower:
+        if model_name_from_path(m["path"]) == name_lower:
             return m
     for m in models:
-        if name_lower in _model_name_from_path(m["path"]):
+        if name_lower in model_name_from_path(m["path"]):
             return m
     return None
 
@@ -195,7 +193,7 @@ def _ensure_model_running(
 
     allow_eviction controls whether LRU eviction may be used to free a slot.
     The Ollama API sets this True; the OpenAI API sets it False so it never
-    displaces a running model — it either finds a free slot or returns 503.
+    displaces a running model - it either finds a free slot or returns 503.
     """
     from api.instances import (
         launch_instance, relaunch_inactive_instance, wait_for_healthy,
@@ -240,7 +238,7 @@ def _ensure_model_running(
                     "admin-launched models cannot be evicted via the API"
                 )
         else:
-            # OpenAI API: never evict — only proceed if there is already room.
+            # OpenAI API: never evict - only proceed if there is already room.
             if not incoming_embedding_model and LLAMAMAN_MAX_MODELS > 0:
                 if _count_running_instances() >= LLAMAMAN_MAX_MODELS:
                     return None, (
@@ -295,7 +293,7 @@ def _ensure_model_running(
 
 
 def _llamaman_model_entry(m: dict) -> dict:
-    name = _model_name_from_path(m["path"])
+    name = model_name_from_path(m["path"])
     mtime = datetime.fromtimestamp(
         Path(m["path"]).stat().st_mtime if Path(m["path"]).exists() else 0,
         tz=timezone.utc,
@@ -340,7 +338,7 @@ def _probe_server_ready(port: int) -> bool:
 def _llamaman_ps_entry(model_path: str, model_meta: dict | None = None,
                        started_at: float | None = None) -> dict:
     model_meta = model_meta or {}
-    model_name = _model_name_from_path(model_path)
+    model_name = model_name_from_path(model_path)
     size_bytes = model_meta.get("size_bytes")
     if size_bytes is None:
         try:
@@ -783,7 +781,7 @@ def llamaman_v1_models():
         "object": "list",
         "data": [
             {
-                "id": _model_name_from_path(m["path"]),
+                "id": model_name_from_path(m["path"]),
                 "object": "model",
                 "created": int(Path(m["path"]).stat().st_mtime) if Path(m["path"]).exists() else 0,
                 "owned_by": "local",

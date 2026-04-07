@@ -141,11 +141,58 @@ function scheduleSuggestionUpdate() {
 }
 
 // -------------------------------------------------------------------------
+// Model metadata (favorites, notes) - stored in presets
+// -------------------------------------------------------------------------
+let allPresets = {};  // model_path -> preset object (loaded once, kept in sync)
+
+async function loadAllPresets() {
+  try {
+    const res = await apiFetch('/api/presets');
+    if (res && res.ok) allPresets = await res.json();
+  } catch (e) { /* ignore */ }
+}
+
+function isModelFavorited(modelPath) {
+  return !!(allPresets[modelPath] && allPresets[modelPath].favorite);
+}
+
+function getModelNote(modelPath) {
+  return (allPresets[modelPath] && allPresets[modelPath].note) || '';
+}
+
+async function toggleFavorite(modelPath) {
+  const newVal = !isModelFavorited(modelPath);
+  if (!allPresets[modelPath]) allPresets[modelPath] = {};
+  allPresets[modelPath].favorite = newVal;
+  try {
+    await apiFetch(`/api/presets${encodePathForUrl(modelPath)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: newVal }),
+    });
+  } catch (e) { /* ignore */ }
+  return newVal;
+}
+
+async function saveModelNote(modelPath, note) {
+  if (!allPresets[modelPath]) allPresets[modelPath] = {};
+  allPresets[modelPath].note = note;
+  try {
+    await apiFetch(`/api/presets${encodePathForUrl(modelPath)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    });
+  } catch (e) { /* ignore */ }
+}
+
+// -------------------------------------------------------------------------
 // Model Library
 // -------------------------------------------------------------------------
 async function loadModels() {
   const list = document.getElementById('model-list');
   try {
+    await loadAllPresets();
     const res = await apiFetch('/api/models');
     allModels = await res.json();
     renderModels();
@@ -163,6 +210,13 @@ function renderModels() {
     ? allModels.filter(m => m.name.toLowerCase().includes(query) || m.path.toLowerCase().includes(query) || (m.quant && m.quant.toLowerCase().includes(query)))
     : allModels;
 
+  // Sort favorites first alphabetically, then the rest alphabetically
+  filtered.sort((a, b) => {
+    const favDiff = (isModelFavorited(a.path) ? 0 : 1) - (isModelFavorited(b.path) ? 0 : 1);
+    if (favDiff !== 0) return favDiff;
+    return a.name.localeCompare(b.name);
+  });
+
   list.innerHTML = '';
   if (filtered.length === 0) {
     list.innerHTML = `<div id="model-empty">${allModels.length === 0 ? 'No models found in /models' : 'No matches'}</div>`;
@@ -172,16 +226,30 @@ function renderModels() {
     const el = document.createElement('div');
     el.className = 'model-item' + (m.path === selectedModelPath ? ' selected' : '');
     const quantBadge = m.quant ? `<span class="badge badge-quant">${escHtml(m.quant)}</span>` : '';
+    const fav = isModelFavorited(m.path);
+    const starClass = fav ? 'btn-star active' : 'btn-star';
+    const starIcon = fav ? 'fa-solid fa-star' : 'fa-regular fa-star';
     el.innerHTML = `
-      <span class="name">${escHtml(m.name)}</span>
-      <div class="badges">
-        <span class="badge">${m.type.toUpperCase()}</span>
-        ${quantBadge}
-        <span class="badge badge-size">${escHtml(m.size_display)}</span>
+      <div class="model-item-row">
+        <button class="${starClass}" title="Toggle favorite"><i class="${starIcon}"></i></button>
+        <div class="model-item-content">
+          <span class="name">${escHtml(m.name)}</span>
+          <div class="badges">
+            <span class="badge">${m.type.toUpperCase()}</span>
+            ${quantBadge}
+            <span class="badge badge-size">${escHtml(m.size_display)}</span>
+          </div>
+          <span class="path">${escHtml(m.path)}</span>
+        </div>
       </div>
-      <span class="path">${escHtml(m.path)}</span>
       <button class="btn-delete-model" title="Delete model from disk"><i class="fa-solid fa-trash"></i></button>
     `;
+    el.querySelector('.btn-star').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await toggleFavorite(m.path);
+      renderModels();
+      updateLaunchFormStar();
+    });
     el.querySelector('.btn-delete-model').addEventListener('click', (e) => {
       e.stopPropagation();
       deleteModel(m);
@@ -196,6 +264,8 @@ async function selectModel(model, el) {
   el.classList.add('selected');
   selectedModelPath = model.path;
   document.getElementById('f-model-path').value = model.path;
+  document.getElementById('f-note').value = getModelNote(model.path);
+  updateLaunchFormStar();
   const ctxField = document.getElementById('f-ctx-size');
   if (typeof setActiveTab === 'function') setActiveTab('settings', 'launch');
   updatePortSuggestion();
@@ -221,12 +291,22 @@ async function selectModel(model, el) {
       document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
       document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
       document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
+      document.getElementById('f-note').value = p.note || '';
       if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
       toast('Preset loaded', 'info');
     }
   } catch (e) { /* no preset, use defaults */ }
   // Detect layer count for model
   await updateGpuLayersTotal(model.path);
+}
+
+function updateLaunchFormStar() {
+  const btn = document.getElementById('f-favorite');
+  if (!btn) return;
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  const fav = modelPath ? isModelFavorited(modelPath) : false;
+  btn.classList.toggle('active', fav);
+  btn.querySelector('i').className = fav ? 'fa-solid fa-star' : 'fa-regular fa-star';
 }
 
 async function deleteModel(model) {
@@ -286,3 +366,20 @@ if (ctxSizeField) ctxSizeField.addEventListener('input', scheduleSuggestionUpdat
 
 const gpuDevicesField = document.getElementById('f-gpu-devices');
 if (gpuDevicesField) gpuDevicesField.addEventListener('input', scheduleSuggestionUpdate);
+
+// Launch form star toggle
+const launchStarBtn = document.getElementById('f-favorite');
+if (launchStarBtn) launchStarBtn.addEventListener('click', async () => {
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  if (!modelPath) { toast('Select a model first', 'error'); return; }
+  await toggleFavorite(modelPath);
+  updateLaunchFormStar();
+  renderModels();
+});
+
+// Launch form note auto-save on blur
+const noteField = document.getElementById('f-note');
+if (noteField) noteField.addEventListener('blur', () => {
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  if (modelPath) saveModelNote(modelPath, noteField.value.trim());
+});

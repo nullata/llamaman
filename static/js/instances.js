@@ -348,6 +348,8 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
 
   try {
     const body = readLaunchForm();
+    body.note = (document.getElementById('f-note').value || '').trim();
+    body.favorite = isModelFavorited(modelPath);
     const res = await apiFetch(`/api/presets${encodePathForUrl(modelPath)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
