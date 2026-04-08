@@ -9,12 +9,14 @@ services:
       - "5000:5000"
       # Llamaman proxy (Ollama-compatible API for OpenWebUI)
       - "42069:42069"
-      # llama-server instance ports
-      - "8000-8020:9000-9020"
+      # llama-server instance ports (published by spawned containers)
+      - "8000-8020:8000-8020"
     volumes:
       - ./models:/models
       - ./data:/data
       - ./logs:/tmp/llama-logs
+      # Docker socket - allows llamaman to spawn llama-server containers
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - MODELS_DIR=/models
       - DATA_DIR=/data
@@ -29,21 +31,24 @@ services:
       - HEALTH_CHECK_TIMEOUT=3
       - MODEL_LOAD_TIMEOUT=300
       - REQUEST_TIMEOUT=300
+      # Docker-in-Docker settings
+      - LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+      - LLAMA_NETWORK=llamaman-net
+      - LLAMA_CONTAINER_PREFIX=llamaman-
+      - GPU_TYPE=cuda
+      # Restrict which GPUs are visible to all llama-server containers.
+      # Comma-separated indices, e.g. "0,1,3". Leave unset to expose all GPUs.
+      # - LLAMA_GPU_DEVICES=0,1,3
       # Uncomment to set a fixed Flask session secret (required for multi-replica)
       # - SECRET_KEY=change-me-to-something-random
       # Uncomment to use MariaDB/MySQL instead of JSON file storage
       # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
+    networks:
+      - llamaman-net
     # depends_on:
     #   mariadb:
     #     condition: service_healthy
     #     required: false
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
   # --- AMD ROCm ---
@@ -62,6 +67,7 @@ services:
       - ./models:/models
       - ./data:/data
       - ./logs:/tmp/llama-logs
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - MODELS_DIR=/models
       - DATA_DIR=/data
@@ -76,16 +82,22 @@ services:
       - HEALTH_CHECK_TIMEOUT=3
       - MODEL_LOAD_TIMEOUT=300
       - REQUEST_TIMEOUT=300
+      - LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-rocm
+      - LLAMA_NETWORK=llamaman-net
+      - LLAMA_CONTAINER_PREFIX=llamaman-
+      - GPU_TYPE=rocm
+      # - LLAMA_GPU_DEVICES=0,1,3
       # - SECRET_KEY=change-me-to-something-random
       # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
+    networks:
+      - llamaman-net
     # depends_on:
     #   mariadb:
     #     condition: service_healthy
     #     required: false
-    devices:
-      - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
     restart: unless-stopped
+
+networks:
+  llamaman-net:
+    driver: bridge
+    name: llamaman-net

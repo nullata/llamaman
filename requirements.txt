@@ -4,3 +4,4 @@ psutil
 gunicorn
 sqlalchemy
 pymysql
+docker

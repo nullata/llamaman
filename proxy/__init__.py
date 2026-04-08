@@ -316,7 +316,11 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
         elif status == "starting":
             from api.instances import wait_for_healthy
             from config import MODEL_LOAD_TIMEOUT
-            if not wait_for_healthy(internal_port, timeout=MODEL_LOAD_TIMEOUT):
+            with instances_lock:
+                _inst = instances.get(inst_id)
+                _host = _inst.get("_server_host", "localhost") if _inst else "localhost"
+                _port = (_inst.get("_server_port") or _inst.get("_internal_port") or internal_port) if _inst else internal_port
+            if not wait_for_healthy(_host, _port, timeout=MODEL_LOAD_TIMEOUT):
                 start_response("503 Service Unavailable",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "model is loading but did not become healthy in time"}).encode()]
@@ -325,8 +329,14 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
         effective_id = wake_id
         with instances_lock:
             effective_inst = instances.get(effective_id)
-            effective_port = (effective_inst.get("_internal_port", internal_port)
-                              if effective_inst else internal_port)
+            if effective_inst:
+                effective_host = effective_inst.get("_server_host", "localhost")
+                effective_port = (effective_inst.get("_server_port")
+                                  or effective_inst.get("_internal_port")
+                                  or internal_port)
+            else:
+                effective_host = "localhost"
+                effective_port = internal_port
 
         # Validate model name for all statuses (sleeping already validated above,
         # but healthy/starting instances need the same check for consistency)
@@ -345,7 +355,7 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
 
         try:
             req = WerkzeugRequest(environ)
-            target = f"http://localhost:{effective_port}{req.path}"
+            target = f"http://{effective_host}:{effective_port}{req.path}"
             if req.query_string:
                 target += f"?{req.query_string.decode()}"
 

@@ -4,7 +4,7 @@
   <img src="docs/llamaman.jpg" alt="LlamaMan" width="400">
 </p>
 
-A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances from inside a Docker container. Includes an Ollama-compatible API proxy so it works as a drop-in replacement for Ollama with [Open WebUI](https://github.com/open-webui/open-webui).
+A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances. LlamaMan runs as a lightweight Python container and spawns llama-server as sibling Docker containers using the official llama.cpp images. Includes an Ollama-compatible API proxy so it works as a drop-in replacement for Ollama with [Open WebUI](https://github.com/open-webui/open-webui).
 
 ## Features
 
@@ -13,7 +13,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Preset configs** - save/load per-model launch settings
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Instance management** - stop, restart, remove, view live-streamed logs
-- **GPU VRAM indicator** - per-GPU usage bars via nvidia-smi or rocm-smi
+- **GPU VRAM indicator** - per-GPU usage bars queried from running llama-server containers
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -22,24 +22,49 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
 - **Proxy sampling overrides** - force temperature, top-k, top-p, and presence penalty on all proxied requests, configurable per model preset
 
+## How It Works
+
+LlamaMan is a lightweight Python web app with no dependency on llama.cpp itself. When you launch a model, LlamaMan uses the Docker socket to spawn a `ghcr.io/ggml-org/llama.cpp:server-*` container as a sibling on the host. GPU passthrough, port binding, and volume mounts are configured per-container via the Docker SDK.
+
+```
+Host machine
+├── Docker daemon
+│   ├── llamaman container        (Python only — no GPU, no llama.cpp)
+│   │   └── /var/run/docker.sock  (talks to Docker daemon)
+│   ├── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
+│   └── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
+└── GPU hardware
+```
+
+**To update llama.cpp** — no llamaman rebuild needed:
+```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
+```
+
 ## Requirements
 
-- Docker with **one** of:
-  - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (for CUDA / NVIDIA GPUs)
-  - [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) (for AMD GPUs) - **experimental, not tested**
-- A supported GPU (llama.cpp can offload to CPU/RAM when VRAM is insufficient)
+- Docker with access to `/var/run/docker.sock`
+- **One** of:
+  - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for CUDA / NVIDIA GPUs
+  - [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) for AMD GPUs — **experimental, not tested**
+- The llama.cpp server image pulled on the host (see Quick Start)
 
 ## Quick Start
 
 **NVIDIA (CUDA):**
 
 ```bash
+# Pull the llama.cpp image first (only needed once, or when you want to update it)
+docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
+
 docker compose up --build
 ```
 
 **AMD (ROCm)** - experimental, not tested:
 
 ```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-rocm
+
 docker compose --profile rocm up --build llamaman-rocm
 ```
 
@@ -48,6 +73,8 @@ docker compose --profile rocm up --build llamaman-rocm
 - **llama-server public instance ports**: 8000-8020
 
 On first launch, visit the UI to create an admin account via `/setup`.
+
+> **Note:** LlamaMan needs access to the Docker socket (`/var/run/docker.sock`) to spawn llama-server containers. This is already configured in `docker-compose.yml`. Be aware of the security implications — a container with Docker socket access has the ability to manage other containers on the host.
 
 ## Authentication
 
@@ -104,7 +131,7 @@ Or use the **Download** button in the UI to pull from HuggingFace.
 
 1. Select a model from the sidebar
 2. Configure launch settings (GPU layers, context size, idle timeout, etc.)
-3. Click **Launch** - the instance appears with a status badge
+3. Click **Launch** - LlamaMan spawns a llama-server container and the instance appears with a status badge
 4. Optionally click **Save Preset** to remember settings for that model
 
 Each instance exposes an OpenAI-compatible API on its assigned port.
@@ -125,7 +152,7 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Max Queue Depth** | `200` | Maximum number of requests that can wait in the queue when `Max Concurrent` is active. Requests beyond this limit are rejected with HTTP 429. |
 | **Share Queue** | off | When enabled, multiple proxy-managed instances of the **same model** share a single request queue. Incoming requests are distributed across instances as slots become available, providing simple load balancing. |
 | **Embedding Model** | off | Marks the instance as an embedding model. Embedding instances are **excluded** from the `LLAMAMAN_MAX_MODELS` count and will never be evicted by the proxy's LRU policy. |
-| **GPU Devices** | `0` | Comma-separated GPU indices for multi-GPU setups (e.g. `0,1`). |
+| **GPU Devices** | _(global default)_ | Comma-separated GPU indices to make visible to this container (e.g. `0,1`). Overrides `LLAMA_GPU_DEVICES` for this instance. Leave blank to use the global default. |
 | **Extra Args** | _(empty)_ | Additional flags passed directly to llama-server (e.g. `--flash-attn`). |
 | **Proxy Sampling Overrides** | off | When enabled, the proxy forces the configured sampling parameters on every request forwarded to this instance, regardless of what the client sends. |
 | **Temperature** | `0.8` | Sampling temperature to enforce (range: `0.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
@@ -141,20 +168,28 @@ The gate tracks active and queued request counts, which are visible in the insta
 
 **Parallel vs Max Concurrent:** `Parallel` controls how many sequences the llama-server processes internally (KV cache slots). `Max Concurrent` is an external gate that limits how many requests LlamaMan forwards to the server at once. You can use both together - for example, `Parallel=4` with `Max Concurrent=4` ensures the server always has enough KV slots for the requests it receives.
 
+## GPU Stats
+
+LlamaMan has no GPU dependency itself. GPU metrics (VRAM usage, utilization) are collected by running `nvidia-smi` or `rocm-smi` inside a live llama-server container via `docker exec`. This means:
+
+- GPU stats are available as long as at least one llama-server container is running
+- When all instances are stopped or sleeping, the GPU panel shows unavailable
+- Stats reflect the full host GPU state, not just what one container is using
+
 ## Idle Timeout
 
 Set **Idle Timeout min** in the launch form (0 = disabled). When enabled:
 
 - The manager proxies the instance port (transparent to clients)
-- After N minutes of no requests, the llama-server is stopped to free VRAM
-- On the next request, the server auto-relaunches with the same config
+- After N minutes of no requests, the llama-server container is stopped to free VRAM
+- On the next request, a new container is spawned with the same config
 - Client sees the same port/API with just a cold-start delay
 
 For instances managed by the llamaman proxy (OpenWebUI), use the `LLAMAMAN_IDLE_TIMEOUT` env var instead.
 
 ## Per-Instance Proxy
 
-When any of the following are enabled for an instance, LlamaMan inserts a WSGI proxy in front of the llama-server process on that port: **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides**. The public port (e.g. 8000) is handled by the proxy; llama-server listens internally on a separate port.
+When any of the following are enabled for an instance, LlamaMan inserts a WSGI proxy in front of the llama-server container on that port: **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides**. The public port (e.g. 8000) is handled by the proxy; the llama-server container listens internally on a separate port.
 
 ### Model name validation
 
@@ -166,14 +201,14 @@ The proxy enforces that requests reach the correct model. On inference endpoints
   ```
 - If the request body has **no `"model"` field**, the request is forwarded unconditionally.
 
-This check applies whether the instance is currently running or sleeping. For sleeping instances, a mismatched model name prevents the wake - the instance is not relaunched.
+This check applies whether the instance is currently running or sleeping. For sleeping instances, a mismatched model name prevents the wake - no container is spawned.
 
 ### Wake on request
 
 When an instance with idle timeout is sleeping and a request arrives:
 
 1. If the request carries a `"model"` field that does not match >> HTTP 404, no wake
-2. If the model matches (or no model field) >> instance relaunches, request is held until healthy, then forwarded
+2. If the model matches (or no model field) >> a new container is spawned, request is held until healthy, then forwarded
 
 ## Download Settings
 
@@ -188,7 +223,7 @@ The UI provides automatic cleanup under **Settings >> Cleanup Settings**:
 
 - **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads - active downloads are never touched.
 - **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances - running instances are never removed.
-- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their actual OS process. Records whose backing process is no longer alive are marked stopped. Configurable check interval (default: 5 minutes). Useful for catching crashes the normal health-check loop may have missed.
+- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their actual Docker container. Records whose backing container is no longer running are marked stopped. Configurable check interval (default: 5 minutes).
 
 Cleanup runs periodically in the background. These settings only remove or update records in the UI/state - they do not delete model files.
 
@@ -206,7 +241,7 @@ open-webui:
 
 1. OpenWebUI calls `/api/tags` -> LlamaMan returns all available GGUF models
 2. User selects a model in OpenWebUI -> `/api/chat` request arrives
-3. LlamaMan auto-launches a llama-server (using saved preset or defaults)
+3. LlamaMan spawns a llama-server container (using saved preset or defaults)
 4. Waits for healthy, then proxies the request with format translation
 5. When `LLAMAMAN_MAX_MODELS` limit is reached, the least-recently-used **Ollama-managed** model is evicted. Admin UI launched models are never evicted by the Ollama API by default (see [Model eviction policy](#model-eviction-policy))
 
@@ -282,6 +317,8 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 
 ## Environment Variables
 
+### Core
+
 | Variable | Default | Description |
 |---|---|---|
 | `MODELS_DIR` | `/models` | Directory scanned for model files |
@@ -289,8 +326,8 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs |
 | `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool |
 | `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool |
-| `INTERNAL_PORT_RANGE_START` | `9000` | Start of internal llama-server port pool used when proxy mode is enabled |
-| `INTERNAL_PORT_RANGE_END` | `9020` | End of internal llama-server port pool used when proxy mode is enabled |
+| `INTERNAL_PORT_RANGE_START` | `9000` | Start of internal port pool used when proxy mode is enabled |
+| `INTERNAL_PORT_RANGE_END` | `9020` | End of internal port pool used when proxy mode is enabled |
 | `LLAMAMAN_PROXY_PORT` | `42069` | Port for the Ollama-compatible proxy |
 | `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent **chat** models via the proxy (LRU eviction, 0 = unlimited) |
 | `LLAMAMAN_IDLE_TIMEOUT` | `0` | Idle timeout in minutes for proxy-managed instances (0 = disabled) |
@@ -298,7 +335,17 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 | `DATABASE_URL` | _(unset)_ | MariaDB/MySQL connection string. Unset = use JSON files. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks |
 | `MODEL_LOAD_TIMEOUT` | `300` | Seconds to wait for a model to become healthy during launch/relaunch. Increase for very large models. |
-| `REQUEST_TIMEOUT` | `300` | Timeout in seconds for upstream requests to llama-server and gate acquire waits. Increase if requests are being cut off under heavy concurrency. |
+| `REQUEST_TIMEOUT` | `300` | Timeout in seconds for upstream requests to llama-server and gate acquire waits. |
+
+### Docker / GPU
+
+| Variable | Default | Description |
+|---|---|---|
+| `LLAMA_IMAGE` | `ghcr.io/ggml-org/llama.cpp:server-cuda` | llama.cpp Docker image used for all spawned containers. Change this to switch llama.cpp versions or GPU backends without rebuilding LlamaMan. |
+| `LLAMA_NETWORK` | `llamaman-net` | Docker network that LlamaMan and all llama-server containers are attached to. Created automatically if it doesn't exist. |
+| `LLAMA_CONTAINER_PREFIX` | `llamaman-` | Name prefix for spawned llama-server containers (e.g. `llamaman-abcd1234`). |
+| `GPU_TYPE` | `cuda` | GPU backend: `cuda` for NVIDIA, `rocm` for AMD. Controls how GPU devices are passed to containers. |
+| `LLAMA_GPU_DEVICES` | _(unset = all)_ | Comma-separated GPU indices visible to all spawned llama-server containers, e.g. `0,1,3`. Unset exposes all GPUs. Per-instance **GPU Devices** overrides this when set. |
 
 ## REST API
 
@@ -348,7 +395,7 @@ All endpoints return and accept JSON.
   "threads": null,
   "parallel": null,
   "extra_args": "--flash-attn",
-  "gpu_devices": "0",
+  "gpu_devices": "",
   "idle_timeout_min": 0,
   "max_concurrent": 0,
   "max_queue_depth": 200,
@@ -360,6 +407,8 @@ All endpoints return and accept JSON.
   "proxy_sampling_presence_penalty": 0.0
 }
 ```
+
+`gpu_devices`: comma-separated GPU indices for this instance (e.g. `"0"`, `"0,1"`). Leave empty to use `LLAMA_GPU_DEVICES` (or all GPUs if that is also unset).
 
 ### Downloads
 
@@ -437,7 +486,7 @@ Leave `filename` blank to download the full repository.
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/system-info` | CPU usage, core count, RAM usage |
-| `GET` | `/api/gpu-info` | Per-GPU VRAM usage via nvidia-smi |
+| `GET` | `/api/gpu-info` | Per-GPU VRAM and utilization (queried from a running llama-server container) |
 | `GET` | `/health` | Health check (`{"status": "ok"}`) - always open, no auth required |
 
 ### Ollama-compatible (llamaman)
@@ -457,20 +506,22 @@ Leave `filename` blank to download the full repository.
 
 | Symptom | Fix |
 |---|---|
-| _"llama-server binary not found"_ | The base image must be `ghcr.io/ggml-org/llama.cpp:server-cuda` (or `server-rocm` for AMD). Rebuild with `--no-cache`. |
-| Instance stuck on **starting** | Check logs via the Logs button. Common causes: OOM, model path typo, corrupt GGUF. |
-| No GPU / CUDA error | Ensure the NVIDIA Container Toolkit is installed and `docker run --gpus all` works. |
+| Instance stuck on **starting** | Check logs via the Logs button. Common causes: OOM, model path typo, corrupt GGUF, image not pulled. |
+| _"Docker image not found"_ | Run `docker pull ghcr.io/ggml-org/llama.cpp:server-cuda` (or `server-rocm`) on the host before starting LlamaMan. |
+| _"Docker API error"_ on launch | Ensure `/var/run/docker.sock` is mounted into the LlamaMan container (it is by default in `docker-compose.yml`). |
+| No GPU / CUDA error | Ensure the NVIDIA Container Toolkit is installed and `docker run --gpus all` works on the host. |
 | No GPU / ROCm error | Ensure `/dev/kfd` and `/dev/dri` exist on the host and your user is in the `video`/`render` groups. The ROCm image is experimental and not tested. |
+| GPU stats show unavailable | GPU stats require at least one llama-server container to be running. Launch a model first. |
 | Port conflict | The form auto-suggests an unused port; adjust if needed. |
 | Model not showing in OpenWebUI | Ensure `OLLAMA_BASE_URL` points to `http://llamaman:42069`. Check `/api/tags` returns models. |
 | OpenWebUI gets 401 errors | `require_auth` is on (default). Create an API key in the UI and set `OPENAI_API_KEYS` in OpenWebUI's environment. |
 | _"API key required"_ on all requests | Either create an API key, or turn off the "Require authentication" toggle in the API Keys section. |
+| Containers not cleaned up after stop | LlamaMan stops and removes containers when instances are stopped. If containers are orphaned after a crash, run `docker ps --filter name=llamaman-` to find and remove them manually, or restart LlamaMan (orphan adoption runs on startup). |
 
 ## Credits
 
-This work would not be possible without the work of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
+This work would not be possible without the work of [ggml-org/llama.cpp](https://github.com/ggerganov/llama.cpp)
 
 ## License
 
 LlamaMan is licensed under the [Elastic License 2.0](LICENSE). You may use, copy, distribute, and modify the software, subject to the following limitations:
-

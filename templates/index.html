@@ -108,6 +108,9 @@
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-apikeys"
               aria-controls="settings-tab-apikeys" aria-selected="false" tabindex="-1" data-tab="apikeys">API
               Keys</button>
+            <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-images"
+              aria-controls="settings-tab-images" aria-selected="false" tabindex="-1" data-tab="images">Docker
+              Images</button>
             <span class="settings-tab-repo" id="f-repo-info" hidden></span>
             <button type="button" class="btn-star settings-tab-star" id="f-favorite" title="Toggle favorite" hidden>
               <i class="fa-star fa-regular"></i>
@@ -344,6 +347,32 @@
                 Save Token</button>
             </div>
             <div id="hf-tokens-list"></div>
+          </div>
+
+          <div class="tab-panel" id="settings-tab-images" role="tabpanel"
+            aria-labelledby="settings-tab-btn-images" data-tab-panel="images" hidden>
+            <p class="hint-text">Manage the llama.cpp server Docker images used to launch model instances. The active image is set via the <code>LLAMA_IMAGE</code> environment variable.</p>
+            <div class="cleanup-settings-grid">
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-image-auto-update">Auto-update image periodically</label>
+                <label class="toggle-switch" for="s-image-auto-update" aria-label="Auto-update image periodically">
+                  <input id="s-image-auto-update" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-image-update-interval">Update interval (hours)</label>
+                <input id="s-image-update-interval" class="cleanup-settings-input" type="number" value="24" min="1" />
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" id="btn-save-image-settings"><i
+                  class="fa-solid fa-floppy-disk"></i> Save</button>
+              <span id="image-settings-status" class="status-text"></span>
+            </div>
+            <div class="cleanup-section-divider" aria-hidden="true"></div>
+            <div id="images-list"><div class="list-empty-state">Loading…</div></div>
+            <div id="image-pull-status" class="hint-text" hidden></div>
           </div>
 
           <div class="tab-panel" id="settings-tab-apikeys" role="tabpanel"

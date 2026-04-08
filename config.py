@@ -27,6 +27,17 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 
+# Docker-in-Docker settings
+# Fixed port llama-server listens on inside every spawned container.
+LLAMA_CONTAINER_PORT = 8080
+LLAMA_IMAGE = os.environ.get("LLAMA_IMAGE", "ghcr.io/ggml-org/llama.cpp:server-cuda")
+LLAMA_NETWORK = os.environ.get("LLAMA_NETWORK", "llamaman-net")
+LLAMA_CONTAINER_PREFIX = os.environ.get("LLAMA_CONTAINER_PREFIX", "llamaman-")
+GPU_TYPE = os.environ.get("GPU_TYPE", "cuda")  # "cuda" or "rocm"
+# Comma-separated GPU indices visible to all llama-server containers, e.g. "0,1,3".
+# Empty (default) means all GPUs. Per-instance gpu_devices overrides this when set.
+LLAMA_GPU_DEVICES = os.environ.get("LLAMA_GPU_DEVICES", "").strip()
+
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 

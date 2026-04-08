@@ -6,7 +6,7 @@ import time
 import requests
 
 from config import LLAMAMAN_IDLE_TIMEOUT, HEALTH_CHECK_TIMEOUT, logger
-from core.helpers import cleanup_download_dir, is_pid_alive, kill_instance_process, is_llama_pid
+from core.helpers import cleanup_download_dir, is_container_running, kill_instance_process, stop_container
 from core.state import (
     instances, instances_lock,
     downloads, downloads_lock,
@@ -22,6 +22,9 @@ _ORPHAN_SCAN_INTERVAL = 60  # seconds
 
 _last_stale_cleanup_at: float = 0.0
 _DEFAULT_FAILED_DOWNLOAD_RETRY_COUNT = 3
+
+_last_image_check_at: float = 0.0
+_IMAGE_CHECK_INTERVAL = 3600  # check hourly whether auto-update is due
 
 
 def _run_cleanup() -> None:
@@ -72,10 +75,16 @@ def _run_cleanup() -> None:
         storage.merge_settings({"cleanup": cleanup_patch})
 
 
+def _is_container_dead(inst: dict) -> bool:
+    """Return True if the instance's backing container is no longer running."""
+    container_id = inst.get("container_id")
+    if not container_id:
+        return True
+    return not is_container_running(container_id)
 
 
 def _run_stale_record_cleanup() -> None:
-    """Remove instance records whose backing process is no longer alive."""
+    """Remove instance records whose backing container is no longer running."""
     from storage import get_storage
     storage = get_storage()
     cleanup = storage.get_settings().get("cleanup", {})
@@ -97,45 +106,37 @@ def _run_stale_record_cleanup() -> None:
             if inst is None:
                 continue
             status = inst["status"]
-            proc = inst.get("_process")
-            pid = inst.get("pid", 0)
 
         if status in ("starting", "healthy"):
-            process_dead = False
-            if proc is not None:
-                process_dead = proc.poll() is not None
-            elif pid > 0:
-                process_dead = not is_pid_alive(pid) or not is_llama_pid(pid)
-
-            if process_dead:
+            if _is_container_dead(inst):
+                container_id = inst.get("container_id")
                 with instances_lock:
                     inst = instances.get(inst_id)
                     if inst and inst["status"] not in ("stopped", "sleeping"):
-                        kill_instance_process(inst)
+                        if container_id:
+                            stop_container(container_id)
+                        inst["container_id"] = None
                         inst["status"] = "stopped"
                         stats = inst.setdefault("stats", {})
                         stats["crash_count"] = stats.get("crash_count", 0) + 1
                         logger.info(
-                            "Stale record cleanup: marked %s stopped (process dead, crashes: %d)",
+                            "Stale record cleanup: marked %s stopped (container dead, crashes: %d)",
                             inst_id, stats["crash_count"],
                         )
                         changed = True
 
         elif status == "sleeping":
-            # A sleeping instance with no proxy and a dead PID is a stale record.
             has_proxy = inst_id in live_proxies
             if not has_proxy:
-                pid_alive = pid > 0 and is_pid_alive(pid) and is_llama_pid(pid)
-                if not pid_alive:
-                    with instances_lock:
-                        inst = instances.get(inst_id)
-                        if inst and inst["status"] == "sleeping":
-                            inst["status"] = "stopped"
-                            logger.info(
-                                "Stale record cleanup: marked sleeping %s stopped (no proxy, dead pid)",
-                                inst_id,
-                            )
-                            changed = True
+                with instances_lock:
+                    inst = instances.get(inst_id)
+                    if inst and inst["status"] == "sleeping":
+                        inst["status"] = "stopped"
+                        logger.info(
+                            "Stale record cleanup: marked sleeping %s stopped (no proxy)",
+                            inst_id,
+                        )
+                        changed = True
 
     if changed:
         save_state()
@@ -200,7 +201,7 @@ def _handle_download_exit(dl_id: str, exit_code: int) -> None:
 
 
 def _background_poller():
-    global _last_cleanup_at, _last_orphan_scan_at, _last_stale_cleanup_at
+    global _last_cleanup_at, _last_orphan_scan_at, _last_stale_cleanup_at, _last_image_check_at
     while True:
         time.sleep(5)
 
@@ -232,6 +233,19 @@ def _background_poller():
             except Exception as e:
                 logger.warning("Stale record cleanup error: %s", e)
 
+        # --- Docker image auto-update ---
+        if now - _last_image_check_at >= _IMAGE_CHECK_INTERVAL:
+            _last_image_check_at = now
+            try:
+                from api.images import check_and_pull_if_needed
+                from config import LLAMA_IMAGE
+                if LLAMA_IMAGE:
+                    triggered = check_and_pull_if_needed(LLAMA_IMAGE)
+                    if triggered:
+                        logger.info("Image auto-update triggered for %s", LLAMA_IMAGE)
+            except Exception as e:
+                logger.warning("Image auto-update check error: %s", e)
+
         # --- Periodic orphan scan ---
         if now - _last_orphan_scan_at >= _ORPHAN_SCAN_INTERVAL:
             _last_orphan_scan_at = now
@@ -239,7 +253,7 @@ def _background_poller():
                 from core.state import adopt_orphans
                 n = adopt_orphans()
                 if n:
-                    logger.info("Orphan scan: adopted %d untracked llama-server instance(s)", n)
+                    logger.info("Orphan scan: adopted %d untracked llama-server container(s)", n)
             except Exception as e:
                 logger.warning("Orphan scan error: %s", e)
 
@@ -256,35 +270,34 @@ def _background_poller():
                 inst = instances.get(inst_id)
                 if inst is None or inst["status"] in ("stopped", "sleeping"):
                     continue
-                port = inst.get("_internal_port") or inst["port"]
-                proc = inst.get("_process")
-                pid = inst.get("pid", 0)
+                container_id = inst.get("container_id")
+                server_host = inst.get("_server_host", "localhost")
+                port = inst.get("_server_port") or inst.get("_internal_port") or inst["port"]
 
-            # Detect process death - via Popen handle or PID check.
-            # When relying on PID alone, also verify the process is still
-            # llama-server (guards against PID recycling after a crash).
-            process_dead = False
-            if proc is not None:
-                process_dead = proc.poll() is not None
-            elif pid > 0:
-                process_dead = not is_pid_alive(pid) or not is_llama_pid(pid)
+            # Detect container death.
+            container_dead = not container_id or not is_container_running(container_id)
 
-            if process_dead:
+            if container_dead:
                 with instances_lock:
                     inst = instances.get(inst_id)
                     if inst and inst["status"] not in ("stopped", "sleeping"):
-                        kill_instance_process(inst)
+                        if container_id:
+                            stop_container(container_id)
+                        inst["container_id"] = None
                         inst["status"] = "stopped"
                         stats = inst.setdefault("stats", {})
                         stats["crash_count"] = stats.get("crash_count", 0) + 1
-                        logger.info("Instance %s auto-stopped (process died, crashes: %d)",
+                        logger.info("Instance %s auto-stopped (container died, crashes: %d)",
                                     inst_id, stats["crash_count"])
                 refresh_gate(inst_id)
                 save_state()
                 continue
 
             try:
-                resp = requests.get(f"http://localhost:{port}/health", timeout=HEALTH_CHECK_TIMEOUT)
+                resp = requests.get(
+                    f"http://{server_host}:{port}/health",
+                    timeout=HEALTH_CHECK_TIMEOUT,
+                )
                 new_status = "healthy" if resp.json().get("status") == "ok" else "starting"
             except Exception:
                 new_status = "starting"
@@ -303,7 +316,6 @@ def _background_poller():
                             stats["model_load_time_s"] = round(time.time() - started, 1)
                         logger.info("Instance %s is now healthy (was %s)", inst_id, old_status)
 
-            # Persist status transitions so they survive restarts
             if status_changed:
                 save_state()
 
@@ -332,7 +344,6 @@ def _background_poller():
                     has_proxy = inst_id in idle_proxies
                 is_llamaman = inst.get("_llamaman_managed", False)
 
-            # Lazy import to break circular dependency
             from api.instances import stop_instance_by_id, sleep_instance_by_id
 
             if has_proxy or is_llamaman:

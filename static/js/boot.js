@@ -56,3 +56,4 @@ if (presetModelPath && modelPathField) {
 pollDownloads();
 loadSettings();
 loadApiKeys();
+loadImages();

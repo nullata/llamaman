@@ -632,3 +632,158 @@ if (autoRetryFailedDownloadsToggle) {
   autoRetryFailedDownloadsToggle.addEventListener('change', updateDownloadRetryCountState);
   updateDownloadRetryCountState();
 }
+
+// -------------------------------------------------------------------------
+// Docker Image Management
+// -------------------------------------------------------------------------
+
+let _pullStatusInterval = null;
+
+async function loadImages() {
+  const list = document.getElementById('images-list');
+  if (!list) return;
+  try {
+    const res = await apiFetch('/api/images');
+    if (!res) return;
+    const data = await res.json();
+
+    const autoToggle = document.getElementById('s-image-auto-update');
+    if (autoToggle) autoToggle.checked = !!data.auto_update_enabled;
+    const intervalInput = document.getElementById('s-image-update-interval');
+    if (intervalInput) intervalInput.value = data.auto_update_interval_hours ?? 24;
+
+    if (!data.images || data.images.length === 0) {
+      list.innerHTML = '<div class="list-empty-state">No images tracked yet.</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    data.images.forEach(img => {
+      const isActive = img.name === data.current_image;
+      const digestShort = img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : '—';
+      const sizeMb = img.size_mb ? `${img.size_mb} MB` : '—';
+      const pulledAt = img.last_pulled_at
+        ? new Date(img.last_pulled_at * 1000).toLocaleString()
+        : 'Never';
+      const presentBadge = img.present
+        ? '<span class="badge badge-ok">local</span>'
+        : '<span class="badge badge-warn">not pulled</span>';
+      const activeBadge = isActive ? '<span class="badge badge-info">active</span>' : '';
+
+      const item = document.createElement('div');
+      item.className = 'dl-item';
+      item.innerHTML = `
+        <div class="dl-item-top">
+          <span class="dl-item-name"><strong>${escHtml(img.name)}</strong> ${activeBadge} ${presentBadge}</span>
+          <code class="list-meta-code" title="${escHtml(img.digest || '')}">${escHtml(digestShort)}</code>
+          <span class="list-meta-date">${escHtml(sizeMb)}</span>
+          <span class="list-meta-date">pulled: ${escHtml(pulledAt)}</span>
+          <button class="btn-xs btn-image-pull" data-image="${escHtml(img.name)}">
+            <i class="fa-solid fa-arrow-down-to-line"></i> Pull
+          </button>
+        </div>
+      `;
+      list.appendChild(item);
+    });
+
+    list.querySelectorAll('.btn-image-pull').forEach(btn => {
+      btn.addEventListener('click', () => triggerImagePull(btn.dataset.image));
+    });
+  } catch (e) {
+    const list = document.getElementById('images-list');
+    if (list) list.innerHTML = '<div class="list-empty-state">Error loading images.</div>';
+  }
+}
+
+async function triggerImagePull(imageName) {
+  const statusEl = document.getElementById('image-pull-status');
+  try {
+    const res = await apiFetch('/api/images/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageName }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(`Pull failed: ${data.error}`, 'error');
+      return;
+    }
+    toast(`Pulling ${imageName}…`, 'info');
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = 'Pulling…';
+    }
+    startPullStatusPolling();
+  } catch (e) {
+    toast('Error starting pull: ' + e.message, 'error');
+  }
+}
+
+function startPullStatusPolling() {
+  if (_pullStatusInterval) return;
+  _pullStatusInterval = setInterval(pollPullStatus, 2000);
+}
+
+async function pollPullStatus() {
+  const statusEl = document.getElementById('image-pull-status');
+  try {
+    const res = await apiFetch('/api/images/pull-status');
+    if (!res) return;
+    const state = await res.json();
+
+    if (state.status === 'pulling') {
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.textContent = `Pulling ${state.image}: ${state.message}`;
+      }
+      return;
+    }
+
+    // Done or error — stop polling
+    clearInterval(_pullStatusInterval);
+    _pullStatusInterval = null;
+
+    if (state.status === 'done') {
+      if (statusEl) statusEl.hidden = true;
+      toast(`Image updated: ${state.image}`, 'success');
+      await loadImages();
+    } else if (state.status === 'error') {
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.textContent = `Pull error: ${state.message}`;
+      }
+      toast(`Pull error: ${state.message}`, 'error');
+    } else {
+      if (statusEl) statusEl.hidden = true;
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function saveImageSettings() {
+  const autoToggle = document.getElementById('s-image-auto-update');
+  const intervalInput = document.getElementById('s-image-update-interval');
+  if (!autoToggle || !intervalInput) return;
+
+  try {
+    const res = await apiFetch('/api/images/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        auto_update_enabled: autoToggle.checked,
+        auto_update_interval_hours: parseInt(intervalInput.value) || 24,
+      }),
+    });
+    if (res && res.ok) {
+      const status = document.getElementById('image-settings-status');
+      if (status) {
+        status.textContent = 'Saved.';
+        setTimeout(() => { status.textContent = ''; }, 2000);
+      }
+    }
+  } catch (e) {
+    toast('Error saving image settings: ' + e.message, 'error');
+  }
+}
+
+const btnSaveImageSettings = document.getElementById('btn-save-image-settings');
+if (btnSaveImageSettings) btnSaveImageSettings.addEventListener('click', saveImageSettings);

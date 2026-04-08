@@ -1,13 +1,13 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
-import os
+import json
 import threading
 import time
 import uuid
 from pathlib import Path
 
-from config import logger
-from core.helpers import is_pid_alive, kill_instance_process, kill_pid, scan_llama_server_processes
+from config import LLAMA_CONTAINER_PORT, LLAMA_CONTAINER_PREFIX, logger
+from core.helpers import get_docker_client, is_container_running, stop_container
 
 
 instances: dict[str, dict] = {}
@@ -48,7 +48,8 @@ def save_state():
                     "model_name": inst["model_name"],
                     "model_path": inst["model_path"],
                     "port": inst["port"],
-                    "pid": inst.get("pid", 0),
+                    "container_id": inst.get("container_id", ""),
+                    "container_name": inst.get("container_name", ""),
                     "status": inst["status"],
                     "log_file": inst.get("log_file", ""),
                     "config": inst.get("config", {}),
@@ -80,46 +81,61 @@ def save_state():
             logger.warning("Failed to save state: %s", e)
 
 
-
-
-
 def adopt_orphans() -> int:
-    """Find running llama-server processes not tracked by the manager and adopt them.
+    """Find running llama-server containers not tracked by the manager and adopt them.
 
-    Creates a minimal instance entry for each orphan (status=starting so the
-    health poller will verify and flip it to healthy). Returns the count adopted.
+    Scans Docker containers with the llamaman label. Returns the count adopted.
     """
-    found = scan_llama_server_processes()
-    if not found:
+    from core.helpers import list_llama_containers
+
+    containers = list_llama_containers()
+    if not containers:
         return 0
 
     adopted = 0
     from storage import get_storage
     storage = get_storage()
+
     with instances_lock:
-        tracked_pids = {inst["pid"] for inst in instances.values() if inst.get("pid", 0) > 0}
-        active_ports = {inst["port"] for inst in instances.values()
-                        if inst["status"] not in ("stopped",)}
+        tracked_ids = {inst.get("container_id") for inst in instances.values() if inst.get("container_id")}
+        active_ports = {inst["port"] for inst in instances.values() if inst["status"] not in ("stopped",)}
 
-    for info in found:
-        pid = info["pid"]
-        port = info["port"]
+    for container in containers:
+        cid = container.id
+        if cid in tracked_ids:
+            continue
 
-        if pid in tracked_pids:
+        labels = container.labels or {}
+        inst_id = labels.get("llamaman.instance_id")
+        model_path = labels.get("llamaman.model_path")
+        port_str = labels.get("llamaman.port")
+        config_str = labels.get("llamaman.config", "{}")
+
+        if not inst_id or not model_path or not port_str:
+            continue
+
+        try:
+            port = int(port_str)
+        except ValueError:
             continue
 
         if port in active_ports:
             logger.warning(
-                "Orphan llama-server PID %d on port %d conflicts with a tracked instance - killing orphan",
-                pid, port,
+                "Orphan container %s on port %d conflicts with a tracked instance - stopping",
+                cid[:12], port,
             )
-            kill_pid(pid)
+            stop_container(cid)
             continue
 
-        preset = storage.get_preset(info["model_path"]) or {}
+        try:
+            config = json.loads(config_str)
+        except Exception:
+            config = {}
+
+        preset = storage.get_preset(model_path) or {}
         orphan_config = {
-            **info["config"],
-            "embedding_model": preset.get("embedding_model", False),
+            **config,
+            "embedding_model": preset.get("embedding_model", config.get("embedding_model", False)),
             "proxy_sampling_override_enabled": preset.get("proxy_sampling_override_enabled", False),
             "proxy_sampling_temperature": preset.get("proxy_sampling_temperature", 0.8),
             "proxy_sampling_top_k": preset.get("proxy_sampling_top_k", 40),
@@ -127,19 +143,20 @@ def adopt_orphans() -> int:
             "proxy_sampling_presence_penalty": preset.get("proxy_sampling_presence_penalty", 0.0),
         }
 
-        inst_id = str(uuid.uuid4())
+        container_name = container.name
         inst = {
             "id": inst_id,
-            "model_name": Path(info["model_path"]).name,
-            "model_path": info["model_path"],
+            "model_name": Path(model_path).name,
+            "model_path": model_path,
             "port": port,
             "status": "starting",  # poller will verify and flip to healthy
-            "pid": pid,
+            "container_id": cid,
+            "container_name": container_name,
             "log_file": "",
             "config": orphan_config,
             "started_at": time.time(),
-            "_process": None,
-            "_log_fh": None,
+            "_server_host": container_name,
+            "_server_port": LLAMA_CONTAINER_PORT,
             "_last_request_at": time.time(),
             "stats": {
                 "model_load_time_s": None,
@@ -151,12 +168,12 @@ def adopt_orphans() -> int:
         }
         with instances_lock:
             instances[inst_id] = inst
-            tracked_pids.add(pid)
+            tracked_ids.add(cid)
             active_ports.add(port)
 
         logger.info(
-            "Adopted orphan llama-server PID %d port %d model %s%s",
-            pid, port, inst["model_name"],
+            "Adopted orphan container %s port %d model %s%s",
+            cid[:12], port, inst["model_name"],
             " [embedding]" if orphan_config.get("embedding_model") else "",
         )
         adopted += 1
@@ -170,10 +187,9 @@ def adopt_orphans() -> int:
 def load_state():
     """Restore instance and download history from disk on startup.
 
-    For instances that were running (healthy/starting) when we last saved:
-    - If the process is still alive (orphaned after a worker crash),
-      reattach to it so the poller can monitor it.
-    - If the process is dead, mark the instance as stopped.
+    For instances that were running when we last saved:
+    - If the container is still running, reattach to it.
+    - If the container is gone, mark the instance as stopped (or sleeping if it has a proxy).
 
     Returns a list of (inst_id, proxy_port, internal_port) tuples for
     instances that need their idle proxies restarted.
@@ -193,39 +209,41 @@ def load_state():
         max_concurrent = config.get("max_concurrent", 0)
         internal_port = entry.get("internal_port")
         saved_status = entry.get("status", "stopped")
-        saved_pid = entry.get("pid", 0)
+        saved_container_id = entry.get("container_id", "")
+        container_name = entry.get("container_name", "")
         has_proxy = internal_port and (
             idle_timeout > 0
             or max_concurrent > 0
             or config.get("proxy_sampling_override_enabled", False)
         )
 
-        # Determine restored status based on what was saved and whether
-        # the process is still alive.
         if saved_status == "stopped":
-            # User explicitly stopped it - if process is somehow alive, kill it
-            if is_pid_alive(saved_pid):
-                logger.info("Killing orphaned stopped instance PID %d", saved_pid)
-                kill_pid(saved_pid)
+            # User explicitly stopped it - if container somehow still exists, kill it
+            if saved_container_id and is_container_running(saved_container_id):
+                logger.info("Stopping orphaned stopped instance container %s", saved_container_id[:12])
+                stop_container(saved_container_id)
             restored_status = "stopped"
+            saved_container_id = ""
         elif saved_status in ("healthy", "starting"):
-            # Was running - check if the process survived (orphaned after
-            # worker crash).
-            if is_pid_alive(saved_pid):
+            if saved_container_id and is_container_running(saved_container_id):
                 restored_status = "starting"  # poller will flip to healthy
-                logger.info("Reattaching to orphaned instance %s (PID %d)",
-                            entry.get("model_name", "?"), saved_pid)
+                logger.info("Reattaching to orphaned instance %s (container %s)",
+                            entry.get("model_name", "?"), saved_container_id[:12])
             elif has_proxy:
                 restored_status = "sleeping"
+                saved_container_id = ""
             else:
                 restored_status = "stopped"
+                saved_container_id = ""
         elif saved_status == "sleeping":
             if has_proxy:
                 restored_status = "sleeping"
             else:
                 restored_status = "stopped"
+            saved_container_id = ""
         else:
             restored_status = "stopped"
+            saved_container_id = ""
 
         inst = {
             "id": entry["id"],
@@ -233,12 +251,13 @@ def load_state():
             "model_path": entry["model_path"],
             "port": entry.get("port", 0),
             "status": restored_status,
-            "pid": saved_pid if restored_status not in ("stopped",) else 0,
+            "container_id": saved_container_id,
+            "container_name": container_name,
             "log_file": entry.get("log_file", ""),
             "config": config,
             "started_at": entry.get("started_at", 0),
-            "_process": None,
-            "_log_fh": None,
+            "_server_host": container_name or "localhost",
+            "_server_port": LLAMA_CONTAINER_PORT if container_name else None,
             "_llamaman_managed": entry.get("llamaman_managed", False),
             "_last_request_at": time.time(),
             "stats": entry.get("stats", {
@@ -286,6 +305,6 @@ def load_state():
 
     n = adopt_orphans()
     if n:
-        logger.info("Startup orphan scan: adopted %d untracked llama-server instance(s)", n)
+        logger.info("Startup orphan scan: adopted %d untracked llama-server container(s)", n)
 
     return restore_proxies

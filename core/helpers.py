@@ -16,19 +16,6 @@ def model_name_from_path(path: str) -> str:
     return Path(path).stem.lower()
 
 
-def is_pid_alive(pid: int) -> bool:
-    """Check if a process with the given PID is still running."""
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)  # signal 0 = just check existence
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists but we can't signal it
-
-
 def format_size(size_bytes: int) -> str:
     if size_bytes >= 1024**3:
         return f"{size_bytes / (1024**3):.1f} GB"
@@ -56,8 +43,12 @@ def cleanup_download_dir(dest_path: str) -> None:
 
 
 def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
+    """Build the argument list passed to the llama-server container.
+
+    The container already has llama-server as its entrypoint, so we only
+    supply the flags (no binary path prefix).
+    """
     cmd = [
-        "/app/llama-server",
         "--model", model_path,
         "--host", "0.0.0.0",
         "--port", str(port),
@@ -75,7 +66,28 @@ def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
     return cmd
 
 
-def kill_pid(pid: int) -> None:
+def kill_instance_process(inst: dict):
+    """Stop a subprocess-based instance (used for downloads, not llama-server containers)."""
+    proc = inst.get("_process")
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    elif proc is None and inst.get("pid", 0) > 0:
+        _kill_pid(inst["pid"])
+    fh = inst.get("_log_fh")
+    if fh:
+        try:
+            fh.close()
+        except Exception:
+            pass
+    inst["_process"] = None
+    inst["_log_fh"] = None
+
+
+def _kill_pid(pid: int) -> None:
     """Best-effort kill of a process by PID. SIGTERM first, SIGKILL after 10s."""
     try:
         os.kill(pid, signal.SIGTERM)
@@ -90,26 +102,6 @@ def kill_pid(pid: int) -> None:
         pass
     except Exception:
         pass
-
-
-def kill_instance_process(inst: dict):
-    proc = inst.get("_process")
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-    elif proc is None and inst.get("pid", 0) > 0:
-        kill_pid(inst["pid"])
-    fh = inst.get("_log_fh")
-    if fh:
-        try:
-            fh.close()
-        except Exception:
-            pass
-    inst["_process"] = None
-    inst["_log_fh"] = None
 
 
 def read_log_file(log_path: str, tail: int = 100) -> list[str]:
@@ -141,117 +133,82 @@ def stream_log_file(log_file):
         return
 
 
-def _parse_llama_cmdline(pid: int) -> dict | None:
-    """Read /proc/<pid>/cmdline and parse it if it's a llama-server process.
+# ---------------------------------------------------------------------------
+# Docker helpers
+# ---------------------------------------------------------------------------
 
-    Returns a dict with model_path, port, and config keys, or None if the
-    process is not a llama-server or the cmdline can't be read.
-    """
+_docker_client = None
+_docker_client_lock = __import__("threading").Lock()
+
+
+def get_docker_client():
+    """Return a singleton docker.DockerClient connected via the local socket."""
+    global _docker_client
+    if _docker_client is not None:
+        return _docker_client
+    with _docker_client_lock:
+        if _docker_client is None:
+            import docker
+            _docker_client = docker.from_env()
+    return _docker_client
+
+
+def stop_container(container_id: str, timeout: int = 10) -> None:
+    """Stop and remove a container by ID. Best-effort; ignores not-found errors."""
+    import docker
     try:
-        exe = os.readlink(f"/proc/{pid}/exe")
-        if Path(exe).name != "llama-server":
-            return None
-    except (FileNotFoundError, PermissionError, OSError):
-        return None
+        c = get_docker_client().containers.get(container_id)
+        c.stop(timeout=timeout)
+        c.remove(force=True)
+    except docker.errors.NotFound:
+        pass
+    except Exception:
+        pass
 
+
+def is_container_running(container_id: str) -> bool:
+    """Return True if the container exists and has status 'running'."""
+    import docker
     try:
-        with open(f"/proc/{pid}/cmdline", "rb") as f:
-            args = f.read().decode("utf-8", errors="replace").split("\x00")
-    except (FileNotFoundError, PermissionError):
-        return None
-
-    model_path = None
-    port = None
-    n_gpu_layers = -1
-    ctx_size = 4096
-    threads = None
-    parallel = None
-
-    i = 0
-    while i < len(args):
-        a = args[i]
-        nxt = args[i + 1] if i + 1 < len(args) else None
-        if a in ("--model", "-m") and nxt:
-            model_path = nxt; i += 2
-        elif a == "--port" and nxt:
-            try: port = int(nxt)
-            except ValueError: pass
-            i += 2
-        elif a in ("--n-gpu-layers", "-ngl") and nxt:
-            try: n_gpu_layers = int(nxt)
-            except ValueError: pass
-            i += 2
-        elif a in ("--ctx-size", "-c") and nxt:
-            try: ctx_size = int(nxt)
-            except ValueError: pass
-            i += 2
-        elif a in ("--threads", "-t") and nxt:
-            try: threads = int(nxt)
-            except ValueError: pass
-            i += 2
-        elif a in ("--parallel", "-np") and nxt:
-            try: parallel = int(nxt)
-            except ValueError: pass
-            i += 2
-        else:
-            i += 1
-
-    if not model_path or not port:
-        return None
-
-    return {
-        "pid": pid,
-        "model_path": model_path,
-        "port": port,
-        "config": {
-            "n_gpu_layers": n_gpu_layers,
-            "ctx_size": ctx_size,
-            "threads": threads,
-            "parallel": parallel,
-            "extra_args": "",
-            "gpu_devices": None,
-            "idle_timeout_min": 0,
-            "max_concurrent": 0,
-            "max_queue_depth": 200,
-            "share_queue": False,
-            "embedding_model": False,
-            "proxy_sampling_override_enabled": False,
-            "proxy_sampling_temperature": 0.8,
-            "proxy_sampling_top_k": 40,
-            "proxy_sampling_top_p": 0.95,
-            "proxy_sampling_presence_penalty": 0.0,
-        },
-    }
+        c = get_docker_client().containers.get(container_id)
+        c.reload()
+        return c.status == "running"
+    except docker.errors.NotFound:
+        return False
+    except Exception:
+        return False
 
 
-def is_llama_pid(pid: int) -> bool:
-    """Return True if the given PID is a running llama-server process."""
-    return _parse_llama_cmdline(pid) is not None
-
-
-def scan_llama_server_processes() -> list[dict]:
-    """Return a list of parsed config dicts for all running llama-server processes."""
-    results = []
+def list_llama_containers() -> list:
+    """Return all running containers with the llamaman label."""
+    from config import LLAMA_CONTAINER_PREFIX
     try:
-        entries = os.listdir("/proc")
-    except PermissionError:
-        return results
-    for entry in entries:
-        if not entry.isdigit():
-            continue
-        info = _parse_llama_cmdline(int(entry))
-        if info:
-            results.append(info)
-    return results
+        return get_docker_client().containers.list(
+            filters={"name": LLAMA_CONTAINER_PREFIX, "label": "llamaman.instance_id"}
+        )
+    except Exception:
+        return []
 
+
+def ensure_docker_network() -> None:
+    """Create the llamaman Docker network if it doesn't already exist."""
+    import docker
+    from config import LLAMA_NETWORK
+    client = get_docker_client()
+    try:
+        client.networks.get(LLAMA_NETWORK)
+    except docker.errors.NotFound:
+        client.networks.create(LLAMA_NETWORK, driver="bridge")
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Port utilities
+# ---------------------------------------------------------------------------
 
 def is_port_available(port: int, host: str = "0.0.0.0") -> bool:
-    """Return True if the TCP port can be bound locally.
-
-    Note: inherent TOCTOU race - the port may be taken between this check
-    and the actual bind by the child process. Callers must handle Popen/bind
-    failures gracefully.
-    """
+    """Return True if the TCP port can be bound locally."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -287,8 +244,6 @@ def find_available_port(
             used.add(p["internal_port"])
     used |= exclude
     for p in range(range_start, range_end + 1):
-        # Only return ports that are both untracked by LlamaMan and
-        # actually bindable on the host right now.
         if p not in used and is_port_available(p):
             return p
     return None
