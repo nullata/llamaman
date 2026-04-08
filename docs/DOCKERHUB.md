@@ -38,7 +38,7 @@ docker run -d \
   --gpus all \
   -p 5000:5000 \
   -p 42069:42069 \
-  -p 8000-8020:8000-8020 \
+  -p 8000-8020:9000-9020 \
   -v ./models:/models \
   -v ./data:/data \
   -v ./logs:/tmp/llama-logs \
