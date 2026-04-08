@@ -228,7 +228,8 @@ def _extract_model_from_request(environ: dict) -> str | None:
     if path not in _GATED_PATHS:
         return None
     try:
-        body = environ["wsgi.input"].read()
+        content_length = int(environ.get("CONTENT_LENGTH") or 0)
+        body = environ["wsgi.input"].read(content_length)
         environ["wsgi.input"] = io.BytesIO(body)  # rewind for later use
         data = json.loads(body.decode("utf-8"))
         return data.get("model", "").strip() or None
