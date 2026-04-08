@@ -228,7 +228,8 @@ def _extract_model_from_request(environ: dict) -> str | None:
     if path not in _GATED_PATHS:
         return None
     try:
-        body = environ["wsgi.input"].read()
+        content_length = int(environ.get("CONTENT_LENGTH") or 0)
+        body = environ["wsgi.input"].read(content_length)
         environ["wsgi.input"] = io.BytesIO(body)  # rewind for later use
         data = json.loads(body.decode("utf-8"))
         return data.get("model", "").strip() or None
@@ -295,7 +296,7 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "failed to wake model"}).encode()]
         elif status is None:
-            # Instance record gone — try to find a sleeping instance by model + port
+            # Instance record gone - try to find a sleeping instance by model + port
             if requested_model:
                 found_id = _find_sleeping_instance_for_port(requested_model, proxy_port)
                 if found_id:
@@ -326,6 +327,14 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
             effective_inst = instances.get(effective_id)
             effective_port = (effective_inst.get("_internal_port", internal_port)
                               if effective_inst else internal_port)
+
+        # Validate model name for all statuses (sleeping already validated above,
+        # but healthy/starting instances need the same check for consistency)
+        if requested_model and effective_inst:
+            if not _model_matches(effective_inst["model_path"], requested_model):
+                start_response("404 Not Found",
+                               [("Content-Type", "application/json")])
+                return [json.dumps({"error": f"model '{requested_model}' is not loaded on this port"}).encode()]
 
         gate = get_gate(effective_id) if _is_inference_request(environ) else None
         if gate:
