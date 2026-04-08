@@ -57,7 +57,7 @@ docker run -d \
   --group-add render \
   -p 5000:5000 \
   -p 42069:42069 \
-  -p 8000-8020:8000-8020 \
+  -p 8000-8020:9000-9020 \
   -v ./models:/models \
   -v ./data:/data \
   -v ./logs:/tmp/llama-logs \
@@ -74,7 +74,7 @@ services:
     ports:
       - "5000:5000"
       - "42069:42069"
-      - "8000-8020:8000-8020"
+      - "8000-8020:9000-9020"
     volumes:
       - ./models:/models
       - ./data:/data
@@ -194,6 +194,33 @@ Other details:
 - All running chat instances count toward the limit, including admin-launched and proxy-managed instances.
 - Embedding models are excluded from the limit and are never evicted.
 - `LLAMAMAN_MAX_MODELS=0` disables eviction entirely.
+
+## MariaDB / MySQL Setup
+
+By default LlamaMan uses JSON files. To use MariaDB/MySQL, create a database and dedicated user:
+
+```sql
+CREATE DATABASE llamaman CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'llamaman'@'%' IDENTIFIED BY 'yourpassword';
+GRANT ALL PRIVILEGES ON llamaman.* TO 'llamaman'@'%';
+FLUSH PRIVILEGES;
+```
+
+Then set `DATABASE_URL` in your container environment:
+
+```
+DATABASE_URL=mysql+pymysql://llamaman:yourpassword@host:3306/llamaman
+```
+
+Tables are auto-created on first connection.
+
+## Per-Instance Proxy
+
+When **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides** are enabled for an instance, LlamaMan places a proxy in front of that instance's port. The proxy handles auth, concurrency gating, wake-on-request, and model name validation.
+
+On inference endpoints, if the request body includes a `"model"` field, the proxy validates it against the loaded model's filename stem. A prefix match is accepted (e.g. `"qwen2.5-0.5b-instruct-q2"` matches `"qwen2.5-0.5b-instruct-q2_k"`). A mismatch returns HTTP 404. Requests without a `"model"` field are forwarded unconditionally.
+
+For sleeping instances, a mismatched model name returns 404 without waking the instance.
 
 ## Requirements
 

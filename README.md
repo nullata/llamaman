@@ -152,6 +152,29 @@ Set **Idle Timeout min** in the launch form (0 = disabled). When enabled:
 
 For instances managed by the llamaman proxy (OpenWebUI), use the `LLAMAMAN_IDLE_TIMEOUT` env var instead.
 
+## Per-Instance Proxy
+
+When any of the following are enabled for an instance, LlamaMan inserts a WSGI proxy in front of the llama-server process on that port: **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides**. The public port (e.g. 8000) is handled by the proxy; llama-server listens internally on a separate port.
+
+### Model name validation
+
+The proxy enforces that requests reach the correct model. On inference endpoints (`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, `/completion`, `/chat/completions`):
+
+- If the request body includes a `"model"` field, the proxy compares it against the loaded model's filename stem (lowercased, without extension). A **prefix match is accepted** - e.g. `"qwen2.5-0.5b-instruct-q2"` matches `"qwen2.5-0.5b-instruct-q2_k"`. A mismatch returns HTTP 404:
+  ```json
+  {"error": "model 'wrong-model' is not loaded on this port"}
+  ```
+- If the request body has **no `"model"` field**, the request is forwarded unconditionally.
+
+This check applies whether the instance is currently running or sleeping. For sleeping instances, a mismatched model name prevents the wake - the instance is not relaunched.
+
+### Wake on request
+
+When an instance with idle timeout is sleeping and a request arrives:
+
+1. If the request carries a `"model"` field that does not match >> HTTP 404, no wake
+2. If the model matches (or no model field) >> instance relaunches, request is held until healthy, then forwarded
+
 ## Download Settings
 
 The UI provides download-related options under **Settings >> Download Settings**:
@@ -239,11 +262,20 @@ Instance and download logs are written to `LOGS_DIR` (`/tmp/llama-logs`), which 
 
 ### MariaDB / MySQL
 
-Set `DATABASE_URL` to enable:
+Create the database and a dedicated user:
+
+```sql
+CREATE DATABASE llamaman CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'llamaman'@'%' IDENTIFIED BY 'yourpassword';
+GRANT ALL PRIVILEGES ON llamaman.* TO 'llamaman'@'%';
+FLUSH PRIVILEGES;
+```
+
+Then set `DATABASE_URL` to enable:
 
 ```yaml
 environment:
-  - DATABASE_URL=mysql+pymysql://user:password@host:3306/llamaman
+  - DATABASE_URL=mysql+pymysql://llamaman:yourpassword@host:3306/llamaman
 ```
 
 Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql` (included in requirements).
@@ -442,6 +474,3 @@ This work would not be possible without the work of [ggml-org/llama.cpp](https:/
 
 LlamaMan is licensed under the [Elastic License 2.0](LICENSE). You may use, copy, distribute, and modify the software, subject to the following limitations:
 
-- You may **not** provide it as a hosted or managed service
-- You may **not** remove or circumvent license key functionality
-- You may **not** alter or remove licensing, copyright, or other notices

@@ -10,7 +10,7 @@ services:
       # Llamaman proxy (Ollama-compatible API for OpenWebUI)
       - "42069:42069"
       # llama-server instance ports
-      - "8000-8020:8000-8020"
+      - "8000-8020:9000-9020"
     volumes:
       - ./models:/models
       - ./data:/data
