@@ -13,6 +13,8 @@ from flask import Blueprint, Response, jsonify, request
 from config import (
     GPU_TYPE,
     HEALTH_CHECK_TIMEOUT,
+    HOST_LOGS_DIR,
+    HOST_MODELS_DIR,
     INTERNAL_PORT_RANGE_END,
     INTERNAL_PORT_RANGE_START,
     LLAMA_CONTAINER_PORT,
@@ -259,11 +261,13 @@ def _run_container(
 
     ensure_docker_network()
 
-    # Model path inside the container mirrors the host path.
-    # MODELS_DIR is mounted at the same location so relative paths work.
+    # Bind mounts for the sibling container.
+    # SOURCE must be a path on the Docker HOST (the daemon's filesystem).
+    # When llamaman itself runs in Docker, HOST_MODELS_DIR / HOST_LOGS_DIR are
+    # the real host paths; they default to MODELS_DIR / LOGS_DIR for bare-metal.
     volumes = {
-        MODELS_DIR: {"bind": MODELS_DIR, "mode": "ro"},
-        LOGS_DIR: {"bind": LOGS_DIR, "mode": "rw"},
+        HOST_MODELS_DIR: {"bind": MODELS_DIR, "mode": "ro"},
+        HOST_LOGS_DIR: {"bind": LOGS_DIR, "mode": "rw"},
     }
 
     # Publish container port → host port so the Werkzeug proxy and direct

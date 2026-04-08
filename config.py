@@ -38,6 +38,13 @@ GPU_TYPE = os.environ.get("GPU_TYPE", "cuda")  # "cuda" or "rocm"
 # Empty (default) means all GPUs. Per-instance gpu_devices overrides this when set.
 LLAMA_GPU_DEVICES = os.environ.get("LLAMA_GPU_DEVICES", "").strip()
 
+# When llamaman runs inside Docker, the Docker daemon (on the host) needs the
+# HOST-side paths to bind-mount into sibling llama-server containers.
+# Set these to the real host paths that are mounted as MODELS_DIR / LOGS_DIR
+# inside the llamaman container.  If llamaman runs bare-metal, leave unset.
+HOST_MODELS_DIR = os.environ.get("HOST_MODELS_DIR", MODELS_DIR)
+HOST_LOGS_DIR = os.environ.get("HOST_LOGS_DIR", LOGS_DIR)
+
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
