@@ -12,6 +12,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **One-click launch** - configure GPU layers, context size, threads, multi-GPU, extra args
 - **Preset configs** - save/load per-model launch settings
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
+- **Model backup and restore** - export all model metadata and presets to JSON, restore on any instance by re-queuing missing downloads automatically
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
@@ -20,7 +21,8 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Require auth toggle** - enforce bearer token authentication on all endpoints (including model loading) or leave model endpoints open
 - **Persistent state** - instance history and configs survive container restarts
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
-- **Proxy sampling overrides** - force temperature, top-k, top-p, and presence penalty on all proxied requests, configurable per model preset
+- **Proxy sampling overrides** - force temperature, top-k, top-p, presence penalty, and repeat penalty on all proxied requests, configurable per model preset
+- **Docker image management** - pull any llama.cpp image by name, delete old local images from the Settings UI
 
 ## How It Works
 
@@ -172,6 +174,7 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Top K** | `40` | Top-k sampling value to enforce (min: `0`). Only active when proxy sampling overrides are enabled. |
 | **Top P** | `0.95` | Top-p (nucleus) sampling value to enforce (range: `0.01`–`1.0`). Only active when proxy sampling overrides are enabled. |
 | **Presence Penalty** | `0.0` | Presence penalty to enforce (range: `-2.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
+| **Repeat Penalty** | `0.0` | Repeat penalty to enforce (range: `0.0`–`2.0`). `0` = disabled (not injected). Only active when proxy sampling overrides are enabled. |
 
 ### Concurrency and queueing
 
@@ -233,6 +236,24 @@ The UI provides download-related options under **Settings >> Download Settings**
 
 - **Auto-retry failed downloads** - automatically retries downloads that fail due to network errors or interruptions. Off by default.
 - **Retry count per failed download** - how many times to retry before marking a download as permanently failed (default: 3, min: 1). Only active when auto-retry is enabled.
+
+## Docker Image Management
+
+**Settings >> Docker Images** lets you manage the llama.cpp server images used to spawn containers:
+
+- **Pull image by name** - type any image name (e.g. `ghcr.io/ggml-org/llama.cpp:server-cuda`) and pull it directly without it needing to be in the tracked list first
+- **Delete local image** - each tracked image has a delete button that removes it from Docker and from the tracked list. Disabled for the active `LLAMA_IMAGE`. Returns an error if Docker refuses (e.g. image in use by a running container)
+- **Auto-update** - optionally pull the active image on a configurable interval
+
+## Model Backup and Restore
+
+**Settings >> App Settings** provides export and restore for model metadata and presets:
+
+- **Download Stored Models JSON** - exports all scanned models with their preset configs to a timestamped JSON file. Use this to back up your configuration or migrate to a new host.
+- **Restore from JSON** - upload a previously exported JSON. For each model in the file:
+  - Already present on disk: preset is merged in (existing values are not overwritten)
+  - Not present but has a HuggingFace source: download is queued immediately and preset is pre-populated at the expected path so it is ready when the file lands
+  - Not present and no known source: reported as unrestorable
 
 ## Cleanup Settings
 
@@ -422,7 +443,8 @@ All endpoints return and accept JSON.
   "proxy_sampling_temperature": 0.8,
   "proxy_sampling_top_k": 40,
   "proxy_sampling_top_p": 0.95,
-  "proxy_sampling_presence_penalty": 0.0
+  "proxy_sampling_presence_penalty": 0.0,
+  "proxy_sampling_repeat_penalty": 0.0
 }
 ```
 

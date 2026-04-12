@@ -22,6 +22,7 @@ import api.llamaman as llamaman
 import api.settings as settings
 import api.api_keys as api_keys
 import api.images as images
+import api.restore as restore
 
 
 def create_app() -> Flask:
@@ -50,6 +51,7 @@ def create_app() -> Flask:
     application.register_blueprint(settings.bp)
     application.register_blueprint(api_keys.bp)
     application.register_blueprint(images.bp)
+    application.register_blueprint(restore.bp)
 
     auth.init_auth(application)
 

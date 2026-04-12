@@ -814,6 +814,75 @@ async function deleteImage(imageName) {
 const btnSaveImageSettings = document.getElementById('btn-save-image-settings');
 if (btnSaveImageSettings) btnSaveImageSettings.addEventListener('click', saveImageSettings);
 
+const btnRestoreModelsJson = document.getElementById('btn-restore-models-json');
+const fileRestoreModels = document.getElementById('f-restore-models-file');
+
+if (btnRestoreModelsJson && fileRestoreModels) {
+  btnRestoreModelsJson.addEventListener('click', () => fileRestoreModels.click());
+  fileRestoreModels.addEventListener('change', async () => {
+    const file = fileRestoreModels.files[0];
+    if (!file) return;
+    fileRestoreModels.value = '';
+
+    let entries;
+    try {
+      entries = JSON.parse(await file.text());
+    } catch (e) {
+      toast('Invalid JSON file', 'error');
+      return;
+    }
+    if (!Array.isArray(entries)) {
+      toast('Expected a JSON array', 'error');
+      return;
+    }
+
+    btnRestoreModelsJson.disabled = true;
+    const originalHtml = btnRestoreModelsJson.innerHTML;
+    btnRestoreModelsJson.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Restoring...';
+
+    try {
+      const res = await apiFetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entries),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast(`Restore failed: ${data.error}`, 'error');
+        return;
+      }
+
+      const { summary, results } = data;
+      toast(`Restore: ${summary.present} present, ${summary.queued} queued, ${summary.missing} no source${summary.errors ? `, ${summary.errors} errors` : ''}`, 'info');
+
+      const container = document.getElementById('restore-results');
+      const list = document.getElementById('restore-results-list');
+      if (container && list) {
+        const statusBadge = (r) => {
+          if (r.status === 'present') return '<span class="badge badge-ok">present</span>';
+          if (r.status === 'queued') return '<span class="badge badge-info">download queued</span>';
+          if (r.status === 'missing') return '<span class="badge badge-warn">no source</span>';
+          return `<span class="badge badge-warn">error: ${escHtml(r.error || '')}</span>`;
+        };
+        list.innerHTML = results.map(r => `
+          <div class="dl-item">
+            <div class="dl-item-top">
+              <span class="dl-item-name">${escHtml(r.name)}</span>
+              ${statusBadge(r)}
+            </div>
+          </div>
+        `).join('');
+        container.hidden = false;
+      }
+    } catch (e) {
+      toast('Restore error: ' + e.message, 'error');
+    } finally {
+      btnRestoreModelsJson.disabled = false;
+      btnRestoreModelsJson.innerHTML = originalHtml;
+    }
+  });
+}
+
 const btnPullByName = document.getElementById('btn-pull-by-name');
 if (btnPullByName) btnPullByName.addEventListener('click', () => {
   const input = document.getElementById('f-image-pull-name');
