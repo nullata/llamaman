@@ -7,6 +7,9 @@ DEFAULT_PROXY_SAMPLING_TOP_P = 0.95
 DEFAULT_PROXY_SAMPLING_PRESENCE_PENALTY = 0.0
 MIN_PROXY_SAMPLING_PRESENCE_PENALTY = -2.0
 MAX_PROXY_SAMPLING_PRESENCE_PENALTY = 2.0
+DEFAULT_PROXY_SAMPLING_REPEAT_PENALTY = 0.0
+MIN_PROXY_SAMPLING_REPEAT_PENALTY = 0.0
+MAX_PROXY_SAMPLING_REPEAT_PENALTY = 2.0
 
 PROXY_SAMPLING_OVERRIDE_KEYS = (
     "proxy_sampling_override_enabled",
@@ -14,6 +17,7 @@ PROXY_SAMPLING_OVERRIDE_KEYS = (
     "proxy_sampling_top_k",
     "proxy_sampling_top_p",
     "proxy_sampling_presence_penalty",
+    "proxy_sampling_repeat_penalty",
 )
 
 PROXY_SAMPLING_PATHS = frozenset({
@@ -67,12 +71,32 @@ def parse_proxy_sampling_config(body: dict) -> tuple[dict, str | None]:
             f"{MIN_PROXY_SAMPLING_PRESENCE_PENALTY:g} and <= {MAX_PROXY_SAMPLING_PRESENCE_PENALTY:g}",
         )
 
+    try:
+        repeat_penalty = float(
+            body.get(
+                "proxy_sampling_repeat_penalty",
+                DEFAULT_PROXY_SAMPLING_REPEAT_PENALTY,
+            )
+        )
+    except (TypeError, ValueError):
+        return {}, "proxy_sampling_repeat_penalty must be a number"
+    if (
+        repeat_penalty < MIN_PROXY_SAMPLING_REPEAT_PENALTY
+        or repeat_penalty > MAX_PROXY_SAMPLING_REPEAT_PENALTY
+    ):
+        return (
+            {},
+            "proxy_sampling_repeat_penalty must be >= "
+            f"{MIN_PROXY_SAMPLING_REPEAT_PENALTY:g} and <= {MAX_PROXY_SAMPLING_REPEAT_PENALTY:g}",
+        )
+
     return {
         "proxy_sampling_override_enabled": enabled,
         "proxy_sampling_temperature": temperature,
         "proxy_sampling_top_k": top_k,
         "proxy_sampling_top_p": top_p,
         "proxy_sampling_presence_penalty": presence_penalty,
+        "proxy_sampling_repeat_penalty": repeat_penalty,
     }, None
 
 
@@ -94,4 +118,12 @@ def apply_proxy_sampling_overrides(body: dict, config: dict | None) -> dict:
             DEFAULT_PROXY_SAMPLING_PRESENCE_PENALTY,
         )
     )
+    repeat_penalty = float(
+        config.get(
+            "proxy_sampling_repeat_penalty",
+            DEFAULT_PROXY_SAMPLING_REPEAT_PENALTY,
+        )
+    )
+    if repeat_penalty > 0:
+        updated["repeat_penalty"] = repeat_penalty
     return updated

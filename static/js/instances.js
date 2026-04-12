@@ -256,6 +256,7 @@ function readLaunchForm() {
     proxy_sampling_top_k: parseInt(document.getElementById('f-proxy-sampling-top-k').value, 10),
     proxy_sampling_top_p: parseFloat(document.getElementById('f-proxy-sampling-top-p').value),
     proxy_sampling_presence_penalty: parseFloat(document.getElementById('f-proxy-sampling-presence-penalty').value),
+    proxy_sampling_repeat_penalty: parseFloat(document.getElementById('f-proxy-sampling-repeat-penalty').value),
   };
   if (!Number.isFinite(body.proxy_sampling_temperature) || body.proxy_sampling_temperature < 0 || body.proxy_sampling_temperature > 2) {
     throw new Error('Proxy-side temperature must be between 0 and 2');
@@ -268,6 +269,9 @@ function readLaunchForm() {
   }
   if (!Number.isFinite(body.proxy_sampling_presence_penalty) || body.proxy_sampling_presence_penalty < -2 || body.proxy_sampling_presence_penalty > 2) {
     throw new Error('Proxy-side presence penalty must be between -2 and 2');
+  }
+  if (!Number.isFinite(body.proxy_sampling_repeat_penalty) || body.proxy_sampling_repeat_penalty < 0 || body.proxy_sampling_repeat_penalty > 2) {
+    throw new Error('Proxy-side repeat penalty must be between 0 and 2');
   }
   const threads = document.getElementById('f-threads').value.trim();
   if (threads) body.threads = parseInt(threads);

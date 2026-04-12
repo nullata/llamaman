@@ -97,6 +97,7 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             "proxy_sampling_top_k",
             "proxy_sampling_top_p",
             "proxy_sampling_presence_penalty",
+            "proxy_sampling_repeat_penalty",
         ):
             if key in preset:
                 merged[key] = preset[key]
@@ -421,7 +422,8 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
                     proxy_sampling_temperature=0.8,
                     proxy_sampling_top_k=40,
                     proxy_sampling_top_p=0.95,
-                    proxy_sampling_presence_penalty=0.0):
+                    proxy_sampling_presence_penalty=0.0,
+                    proxy_sampling_repeat_penalty=0.0):
     with instances_lock:
         used_ports = {i["port"] for i in instances.values() if i["status"] not in ("stopped",)}
     if port in used_ports:
@@ -459,6 +461,7 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "proxy_sampling_top_k": proxy_sampling_top_k,
         "proxy_sampling_top_p": proxy_sampling_top_p,
         "proxy_sampling_presence_penalty": proxy_sampling_presence_penalty,
+        "proxy_sampling_repeat_penalty": proxy_sampling_repeat_penalty,
     }
 
     inst_id = str(uuid.uuid4())
@@ -723,6 +726,7 @@ def api_instances_restart(inst_id):
         proxy_sampling_top_k=int(config.get("proxy_sampling_top_k", 40)),
         proxy_sampling_top_p=float(config.get("proxy_sampling_top_p", 0.95)),
         proxy_sampling_presence_penalty=float(config.get("proxy_sampling_presence_penalty", 0.0)),
+        proxy_sampling_repeat_penalty=float(config.get("proxy_sampling_repeat_penalty", 0.0)),
     )
     if err:
         _restore_restarted_instance(old)
