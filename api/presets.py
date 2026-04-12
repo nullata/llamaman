@@ -56,6 +56,7 @@ def api_preset_save(model_path):
         "n_gpu_layers": body.get("n_gpu_layers", -1),
         "ctx_size": ctx_size,
         "threads": body.get("threads"),
+        "memory_limit": body.get("memory_limit", ""),
         "parallel": body.get("parallel"),
         "extra_args": body.get("extra_args", ""),
         "gpu_devices": body.get("gpu_devices", ""),

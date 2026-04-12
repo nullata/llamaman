@@ -5,6 +5,7 @@
 // -------------------------------------------------------------------------
 let instances = {};          // id -> instance obj
 let downloads = {};          // id -> download obj
+let containerStats = {};     // id -> {cpu_pct, mem_used_mb, mem_limit_mb}
 let huggingFaceTokens = [];  // saved Hugging Face tokens (safe metadata only)
 let selectedModelPath = null;
 let allModels = [];           // cached model list for filtering

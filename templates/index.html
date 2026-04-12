@@ -108,6 +108,9 @@
             <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-apikeys"
               aria-controls="settings-tab-apikeys" aria-selected="false" tabindex="-1" data-tab="apikeys">API
               Keys</button>
+            <button class="settings-tab" type="button" role="tab" id="settings-tab-btn-images"
+              aria-controls="settings-tab-images" aria-selected="false" tabindex="-1" data-tab="images">Docker
+              Images</button>
             <span class="settings-tab-repo" id="f-repo-info" hidden></span>
             <button type="button" class="btn-star settings-tab-star" id="f-favorite" title="Toggle favorite" hidden>
               <i class="fa-star fa-regular"></i>
@@ -145,6 +148,10 @@
                 <div class="form-group">
                   <label for="f-threads">CPU Threads (optional)</label>
                   <input id="f-threads" type="number" placeholder="(auto)" min="1" />
+                </div>
+                <div class="form-group">
+                  <label for="f-memory-limit">System Memory Limit (optional)</label>
+                  <input id="f-memory-limit" type="text" placeholder="(auto)  e.g. 32g  8192m" />
                 </div>
                 <div class="form-group">
                   <label for="f-parallel">Parallel Slots (optional)</label>
@@ -208,6 +215,10 @@
                     <div class="form-group">
                       <label for="f-proxy-sampling-presence-penalty">Presence Penalty</label>
                       <input id="f-proxy-sampling-presence-penalty" class="launch-settings-input" type="number" value="0.0" min="-2" max="2" step="0.01" />
+                    </div>
+                    <div class="form-group">
+                      <label for="f-proxy-sampling-repeat-penalty">Repeat Penalty</label>
+                      <input id="f-proxy-sampling-repeat-penalty" class="launch-settings-input" type="number" value="0.0" min="0" max="2" step="0.01" />
                     </div>
                   </div>
                 </div>
@@ -301,6 +312,14 @@
               <button class="btn btn-secondary" type="button" id="btn-download-models-json"><i
                   class="fa-solid fa-download"></i>
                 Download Stored Models JSON</button>
+              <button class="btn btn-secondary" type="button" id="btn-restore-models-json"><i
+                  class="fa-solid fa-upload"></i>
+                Restore from JSON</button>
+              <input id="f-restore-models-file" type="file" accept=".json" hidden />
+            </div>
+            <div id="restore-results" hidden>
+              <p class="hint-text">Restore results:</p>
+              <div id="restore-results-list"></div>
             </div>
           </div>
 
@@ -344,6 +363,41 @@
                 Save Token</button>
             </div>
             <div id="hf-tokens-list"></div>
+          </div>
+
+          <div class="tab-panel" id="settings-tab-images" role="tabpanel"
+            aria-labelledby="settings-tab-btn-images" data-tab-panel="images" hidden>
+            <p class="hint-text">Manage the llama.cpp server Docker images used to launch model instances. The active image is set via the <code>LLAMA_IMAGE</code> environment variable.</p>
+            <div class="cleanup-settings-grid">
+              <div class="form-group cleanup-toggle-grid">
+                <label for="s-image-auto-update">Auto-update image periodically</label>
+                <label class="toggle-switch" for="s-image-auto-update" aria-label="Auto-update image periodically">
+                  <input id="s-image-auto-update" type="checkbox" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-image-update-interval">Update interval (hours)</label>
+                <input id="s-image-update-interval" class="cleanup-settings-input" type="number" value="24" min="1" />
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-secondary" type="button" id="btn-save-image-settings"><i
+                  class="fa-solid fa-floppy-disk"></i> Save</button>
+              <span id="image-settings-status" class="status-text"></span>
+            </div>
+            <p class="hint-text">Changes take effect on the next instance launch.</p>
+            <div class="cleanup-section-divider" aria-hidden="true"></div>
+            <div class="form-actions">
+              <input id="f-image-pull-name" class="form-input" type="text"
+                placeholder="ghcr.io/ggml-org/llama.cpp:server-cuda" style="flex:1" />
+              <button class="btn btn-secondary" type="button" id="btn-pull-by-name">
+                <i class="fa-solid fa-arrow-down-to-line"></i> Pull image
+              </button>
+            </div>
+            <div id="image-pull-status" class="hint-text" hidden></div>
+            <p class="hint-text">Locally cached images.</p>
+            <div id="images-list"><div class="list-empty-state">Loading…</div></div>
           </div>
 
           <div class="tab-panel" id="settings-tab-apikeys" role="tabpanel"

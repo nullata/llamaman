@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import Mock, patch
 
 from flask import Flask
 
@@ -96,22 +96,20 @@ class ProxySamplingTests(unittest.TestCase):
 
     @patch("api.instances.save_state")
     @patch("api.instances.start_idle_proxy")
-    @patch("api.instances.subprocess.Popen")
-    @patch("api.instances.open", new_callable=mock_open)
-    @patch("api.instances.build_llama_cmd", return_value=["/app/llama-server"])
+    @patch("api.instances._run_container")
     @patch("api.instances.find_available_port", return_value=9001)
     @patch("api.instances.is_port_available", return_value=True)
     def test_launch_instance_creates_proxy_when_sampling_override_enabled(
         self,
         _is_port_available_mock,
         _find_port_mock,
-        _build_cmd_mock,
-        _open_mock,
-        popen_mock,
+        run_container_mock,
         start_idle_proxy_mock,
         _save_state_mock,
     ):
-        popen_mock.return_value = Mock(pid=4321)
+        fake_container = Mock()
+        fake_container.id = "abc123containerid"
+        run_container_mock.return_value = (fake_container, None)
 
         inst, err = instances_api.launch_instance(
             model_path="/models/chat.gguf",
@@ -179,7 +177,7 @@ class ProxySamplingTests(unittest.TestCase):
         )
 
         self.assertEqual(resp.status_code, 200)
-        forwarded_body = proxy_non_streaming_mock.call_args.args[1]
+        forwarded_body = proxy_non_streaming_mock.call_args.args[2]
         self.assertEqual(forwarded_body["temperature"], 0.3)
         self.assertEqual(forwarded_body["top_k"], 7)
         self.assertEqual(forwarded_body["top_p"], 0.72)

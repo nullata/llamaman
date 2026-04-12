@@ -1,8 +1,8 @@
-FROM ghcr.io/ggml-org/llama.cpp:server-cuda
+FROM python:3.12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y python3 python3-pip python3-venv curl && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -30,6 +30,8 @@ ENV INTERNAL_PORT_RANGE_END=9020
 ENV LLAMAMAN_MAX_MODELS=1
 ENV LLAMAMAN_PROXY_PORT=42069
 ENV LLAMAMAN_IDLE_TIMEOUT=0
+ENV LLAMA_NETWORK=llamaman-net
+ENV LLAMA_CONTAINER_PREFIX=llamaman-
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -f http://localhost:5000/health || exit 1

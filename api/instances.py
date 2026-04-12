@@ -1,7 +1,8 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import json
 import os
-import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -11,18 +12,29 @@ from flask import Blueprint, Response, jsonify, request
 
 from config import (
     HEALTH_CHECK_TIMEOUT,
+    HOST_LOGS_DIR,
+    HOST_MODELS_DIR,
     INTERNAL_PORT_RANGE_END,
     INTERNAL_PORT_RANGE_START,
+    LLAMA_CONTAINER_PORT,
+    LLAMA_CONTAINER_PREFIX,
+    LLAMA_GPU_DEVICES,
+    LLAMA_IMAGE,
+    LLAMA_NETWORK,
     LLAMAMAN_MAX_MODELS,
     LOGS_DIR,
+    MODELS_DIR,
     MODEL_LOAD_TIMEOUT,
     PORT_RANGE_END,
     PORT_RANGE_START,
     logger,
 )
+from core.gpu import get_vendor
 from core.helpers import (
-    build_llama_cmd, find_available_port, is_port_available, kill_instance_process,
-    public_dict, read_log_file, stream_log_file,
+    build_llama_cmd, ensure_docker_network, find_available_port,
+    get_docker_client, is_container_running, is_port_available,
+    kill_instance_process, public_dict, read_log_file, stop_container,
+    stream_log_file,
 )
 from core.proxy_sampling import parse_proxy_sampling_config
 from core.state import (
@@ -35,6 +47,9 @@ from proxy import (
 from storage import get_storage
 
 bp = Blueprint("instances", __name__)
+
+# Fixed port llama-server listens on inside every container.
+LLAMA_CONTAINER_PORT = 8080
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +83,7 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             "n_gpu_layers",
             "ctx_size",
             "threads",
+            "memory_limit",
             "parallel",
             "extra_args",
             "gpu_devices",
@@ -81,6 +97,7 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             "proxy_sampling_top_k",
             "proxy_sampling_top_p",
             "proxy_sampling_presence_penalty",
+            "proxy_sampling_repeat_penalty",
         ):
             if key in preset:
                 merged[key] = preset[key]
@@ -136,8 +153,6 @@ def _get_lru_chat_instances(
             and not inst.get("config", {}).get("embedding_model", False)
         ]
     if ollama_managed_first:
-        # Ollama-managed (True) sorts before admin-UI (False/absent) so that
-        # admin UI launches always evict API-managed models first.
         candidates.sort(key=lambda inst: (
             not inst.get("_llamaman_managed", False),
             inst.get("_last_request_at", inst.get("started_at", 0)),
@@ -174,11 +189,14 @@ def _evict_instances_for_ui_launch_if_needed(
         freed += 1
 
 
-def wait_for_healthy(port: int, timeout: float = 120) -> bool:
+def wait_for_healthy(server_host: str, port: int, timeout: float = 120) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            resp = http_requests.get(f"http://localhost:{port}/health", timeout=HEALTH_CHECK_TIMEOUT)
+            resp = http_requests.get(
+                f"http://{server_host}:{port}/health",
+                timeout=HEALTH_CHECK_TIMEOUT,
+            )
             if resp.json().get("status") == "ok":
                 return True
         except Exception:
@@ -186,6 +204,134 @@ def wait_for_healthy(port: int, timeout: float = 120) -> bool:
         time.sleep(1)
     return False
 
+
+def _start_log_relay(container, log_file: str) -> threading.Thread:
+    """Start a daemon thread that streams container logs to a file (Option B)."""
+    def _relay():
+        try:
+            with open(log_file, "a") as fh:
+                for chunk in container.logs(stream=True, follow=True):
+                    try:
+                        fh.write(chunk.decode("utf-8", errors="replace"))
+                        fh.flush()
+                    except Exception:
+                        break
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_relay, daemon=True)
+    t.start()
+    return t
+
+
+def _resolve_gpu_devices(per_instance: str | None) -> str:
+    """Resolve effective GPU device string.
+
+    Priority: per-instance > global LLAMA_GPU_DEVICES > empty (all).
+    Returns a comma-separated string of device indices, or "" for all.
+    """
+    return (per_instance or LLAMA_GPU_DEVICES or "").strip()
+
+
+def _make_device_requests(gpu_devices: str | None):
+    """Return Docker device_requests for CUDA GPU passthrough."""
+    import docker
+    effective = _resolve_gpu_devices(gpu_devices)
+    if effective:
+        device_ids = [d.strip() for d in effective.split(",") if d.strip()]
+        return [docker.types.DeviceRequest(device_ids=device_ids, capabilities=[["gpu"]])]
+    return [docker.types.DeviceRequest(count=-1, capabilities=[["gpu"]])]
+
+
+def _make_rocm_devices() -> list[str]:
+    return ["/dev/kfd:/dev/kfd", "/dev/dri:/dev/dri"]
+
+
+def _run_container(
+    inst_id: str,
+    container_name: str,
+    model_path: str,
+    server_port: int,
+    config: dict,
+    log_file: str,
+) -> tuple:
+    """Start a llama-server Docker container. Returns (container, error_str)."""
+    import docker
+
+    cmd = build_llama_cmd(model_path, LLAMA_CONTAINER_PORT, config)
+    gpu_devices = config.get("gpu_devices") or None
+
+    ensure_docker_network()
+
+    # Bind mounts for the sibling container.
+    # SOURCE must be a path on the Docker HOST (the daemon's filesystem).
+    # When llamaman itself runs in Docker, HOST_MODELS_DIR / HOST_LOGS_DIR are
+    # the real host paths; they default to MODELS_DIR / LOGS_DIR for bare-metal.
+    volumes = {
+        HOST_MODELS_DIR: {"bind": MODELS_DIR, "mode": "ro"},
+        HOST_LOGS_DIR: {"bind": LOGS_DIR, "mode": "rw"},
+    }
+
+    # Publish container port → host port so the Werkzeug proxy and direct
+    # clients can reach it via localhost/host network.
+    port_bindings = {LLAMA_CONTAINER_PORT: server_port}
+
+    kwargs = dict(
+        image=LLAMA_IMAGE,
+        command=cmd,
+        name=container_name,
+        network=LLAMA_NETWORK,
+        volumes=volumes,
+        ports=port_bindings,
+        detach=True,
+        labels={
+            "llamaman.instance_id": inst_id,
+            "llamaman.model_path": model_path,
+            "llamaman.port": str(server_port),
+            "llamaman.config": json.dumps(config),
+        },
+    )
+
+    threads = config.get("threads")
+    if threads:
+        kwargs["nano_cpus"] = int(float(threads) * 1e9)
+
+    memory_limit = config.get("memory_limit")
+    if memory_limit:
+        kwargs["mem_limit"] = memory_limit
+
+    vendor = get_vendor()
+    if vendor == "rocm":
+        kwargs["devices"] = _make_rocm_devices()
+        kwargs["group_add"] = ["video", "render"]
+        effective_gpus = _resolve_gpu_devices(gpu_devices)
+        if effective_gpus:
+            kwargs.setdefault("environment", {})["ROCR_VISIBLE_DEVICES"] = effective_gpus
+    elif vendor == "intel":
+        # Intel Arc: /dev/dri access only (no /dev/kfd). Per-instance GPU
+        # selection is not supported for Intel (no SYCL_VISIBLE_DEVICES equivalent).
+        kwargs["devices"] = ["/dev/dri:/dev/dri"]
+        kwargs["group_add"] = ["video", "render"]
+    else:
+        # NVIDIA (cuda) or unknown/CPU - use Docker device_requests
+        kwargs["device_requests"] = _make_device_requests(gpu_devices)
+
+    try:
+        client = get_docker_client()
+        container = client.containers.run(**kwargs)
+        _start_log_relay(container, log_file)
+        return container, None
+    except docker.errors.ImageNotFound:
+        return None, f"Docker image '{LLAMA_IMAGE}' not found. Run: docker pull {LLAMA_IMAGE}"
+    except docker.errors.APIError as e:
+        return None, f"Docker API error: {e}"
+    except Exception as e:
+        return None, str(e)
+
+
+# ---------------------------------------------------------------------------
+# Launch / Stop / Sleep
+# ---------------------------------------------------------------------------
 
 def relaunch_inactive_instance(inst_id: str) -> bool:
     with instances_lock:
@@ -197,20 +343,16 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
         config = _merge_preset_into_config(inst["model_path"], inst["config"])
         model_path = inst["model_path"]
         internal_port = inst.get("_internal_port", inst["port"])
+        container_name = inst.get("container_name", f"{LLAMA_CONTAINER_PREFIX}{inst_id[:8]}")
 
-    # Persist the updated config back to the instance record so the UI and
-    # future restarts reflect the latest saved preset.
     with instances_lock:
         inst = instances.get(inst_id)
         if inst:
             inst["config"] = config
 
-    gpu_devices = config.get("gpu_devices")
-
     refresh_gate(inst_id)
 
     log_file = os.path.join(LOGS_DIR, f"{inst_id}.log")
-    cmd = build_llama_cmd(model_path, internal_port, config)
 
     if not is_port_available(internal_port):
         logger.warning(
@@ -224,39 +366,38 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
         save_state()
         return False
 
-    env = {**os.environ}
-    if gpu_devices:
-        env["CUDA_VISIBLE_DEVICES"] = gpu_devices
-
     logger.info(
         "Relaunching %s instance %s on server port %d",
         prior_status, inst_id, internal_port,
     )
 
     try:
-        log_fh = open(log_file, "a")
-        log_fh.write(f"\n--- Relaunched at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
-        proc = subprocess.Popen(
-            cmd, env=env, stdout=log_fh, stderr=subprocess.STDOUT, close_fds=True,
-        )
-    except Exception as e:
-        log_fh.close()
-        logger.error("Failed to relaunch %s: %s", inst_id, e)
+        with open(log_file, "a") as fh:
+            fh.write(f"\n--- Relaunched at {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+    except Exception:
+        pass
+
+    container, err = _run_container(inst_id, container_name, model_path, internal_port, config, log_file)
+    if err:
+        logger.error("Failed to relaunch %s: %s", inst_id, err)
         return False
+
+    server_host = container_name
 
     with instances_lock:
         inst = instances.get(inst_id)
         if inst:
             inst["status"] = "starting"
-            inst["pid"] = proc.pid
-            inst["_process"] = proc
-            inst["_log_fh"] = log_fh
+            inst["container_id"] = container.id
+            inst["container_name"] = container_name
+            inst["_server_host"] = server_host
+            inst["_server_port"] = LLAMA_CONTAINER_PORT
             inst["started_at"] = time.time()
             inst["_last_request_at"] = time.time()
 
     save_state()
 
-    if not wait_for_healthy(internal_port, timeout=MODEL_LOAD_TIMEOUT):
+    if not wait_for_healthy(server_host, LLAMA_CONTAINER_PORT, timeout=MODEL_LOAD_TIMEOUT):
         logger.warning("Relaunched %s but it did not become healthy", inst_id)
         return False
 
@@ -272,12 +413,8 @@ def relaunch_sleeping_instance(inst_id: str) -> bool:
     return relaunch_inactive_instance(inst_id)
 
 
-# ---------------------------------------------------------------------------
-# Launch / Stop / Sleep
-# ---------------------------------------------------------------------------
-
 def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
-                    threads=None, parallel=None, extra_args="",
+                    threads=None, memory_limit=None, parallel=None, extra_args="",
                     gpu_devices=None, idle_timeout_min=0,
                     max_concurrent=0, max_queue_depth=200,
                     share_queue=False, embedding_model=False,
@@ -285,7 +422,8 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
                     proxy_sampling_temperature=0.8,
                     proxy_sampling_top_k=40,
                     proxy_sampling_top_p=0.95,
-                    proxy_sampling_presence_penalty=0.0):
+                    proxy_sampling_presence_penalty=0.0,
+                    proxy_sampling_repeat_penalty=0.0):
     with instances_lock:
         used_ports = {i["port"] for i in instances.values() if i["status"] not in ("stopped",)}
     if port in used_ports:
@@ -309,6 +447,7 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "n_gpu_layers": n_gpu_layers,
         "ctx_size": ctx_size,
         "threads": threads,
+        "memory_limit": memory_limit,
         "parallel": parallel,
         "extra_args": extra_args,
         "gpu_devices": gpu_devices,
@@ -322,35 +461,29 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "proxy_sampling_top_k": proxy_sampling_top_k,
         "proxy_sampling_top_p": proxy_sampling_top_p,
         "proxy_sampling_presence_penalty": proxy_sampling_presence_penalty,
+        "proxy_sampling_repeat_penalty": proxy_sampling_repeat_penalty,
     }
 
     inst_id = str(uuid.uuid4())
+    container_name = f"{LLAMA_CONTAINER_PREFIX}{inst_id[:8]}"
     log_file = os.path.join(LOGS_DIR, f"{inst_id}.log")
     model_name = Path(model_path).name
-    cmd = build_llama_cmd(model_path, server_port, config)
 
     if not is_port_available(port):
         return None, f"Port {port} is already occupied by another process"
     if internal_port and not is_port_available(internal_port):
         return None, f"Internal port {internal_port} is already occupied by another process"
 
-    env = {**os.environ}
-    if gpu_devices:
-        env["CUDA_VISIBLE_DEVICES"] = gpu_devices
+    logger.info(
+        "Launching: %s model=%s port=%d (CUDA_VISIBLE_DEVICES=%s)",
+        container_name, model_name, server_port, gpu_devices or "all",
+    )
 
-    logger.info("Launching: %s (CUDA_VISIBLE_DEVICES=%s)", " ".join(cmd), gpu_devices or "all")
+    container, err = _run_container(inst_id, container_name, model_path, server_port, config, log_file)
+    if err:
+        return None, err
 
-    try:
-        log_fh = open(log_file, "w")
-        proc = subprocess.Popen(
-            cmd, env=env, stdout=log_fh, stderr=subprocess.STDOUT, close_fds=True,
-        )
-    except FileNotFoundError:
-        log_fh.close()
-        return None, "llama-server binary not found. Is llama.cpp installed?"
-    except Exception as e:
-        log_fh.close()
-        return None, str(e)
+    server_host = container_name
 
     instance = {
         "id": inst_id,
@@ -358,12 +491,13 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "model_path": model_path,
         "port": port,
         "status": "starting",
-        "pid": proc.pid,
+        "container_id": container.id,
+        "container_name": container_name,
         "log_file": log_file,
         "config": config,
         "started_at": time.time(),
-        "_process": proc,
-        "_log_fh": log_fh,
+        "_server_host": server_host,
+        "_server_port": LLAMA_CONTAINER_PORT,
         "_last_request_at": time.time(),
         "stats": {
             "model_load_time_s": None,
@@ -396,8 +530,11 @@ def stop_instance_by_id(inst_id: str) -> bool:
         inst = instances.get(inst_id)
         if inst is None:
             return False
-        kill_instance_process(inst)
+        container_id = inst.get("container_id")
         inst["status"] = "stopped"
+        inst["container_id"] = None
+    if container_id:
+        stop_container(container_id)
     release_instance_reservations(inst_id)
     save_state()
     return True
@@ -408,8 +545,11 @@ def sleep_instance_by_id(inst_id: str) -> bool:
         inst = instances.get(inst_id)
         if inst is None:
             return False
-        kill_instance_process(inst)
+        container_id = inst.get("container_id")
         inst["status"] = "sleeping"
+        inst["container_id"] = None
+    if container_id:
+        stop_container(container_id)
     refresh_gate(inst_id)
     save_state()
     logger.info("Instance %s put to sleep (idle timeout)", inst_id)
@@ -445,6 +585,103 @@ def release_instance_reservations(inst_id: str) -> None:
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@bp.route("/api/instances/container-stats", methods=["GET"])
+def api_container_stats():
+    """Return CPU% and memory usage for all healthy/starting containers in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import docker as docker_sdk
+
+    with instances_lock:
+        targets = {
+            inst_id: inst["container_id"]
+            for inst_id, inst in instances.items()
+            if inst.get("status") in ("healthy", "starting")
+            and inst.get("container_id")
+        }
+
+    if not targets:
+        return jsonify({})
+
+    # GPU info - query once, map per instance
+    from core.gpu import get_vendor, query_gpus
+    vendor = get_vendor()
+    all_gpus = query_gpus() or []  # [{index, name, ...}]
+    gpu_map = {g["index"]: g["name"] for g in all_gpus}
+
+    def _gpu_labels(inst_id: str) -> list[str]:
+        with instances_lock:
+            inst = instances.get(inst_id)
+            if not inst:
+                return []
+        if vendor == "intel":
+            name = gpu_map.get(0, "Intel Arc")
+            return [name]
+        if vendor not in ("cuda", "rocm") or not gpu_map:
+            return []
+        effective = _resolve_gpu_devices(inst.get("config", {}).get("gpu_devices"))
+        if effective:
+            indices = [int(x.strip()) for x in effective.split(",") if x.strip().isdigit()]
+        else:
+            indices = sorted(gpu_map.keys())
+        return [f"{gpu_map[i]} [{i}]" for i in indices if i in gpu_map]
+
+    client = get_docker_client()
+
+    def _fetch(inst_id: str, container_id: str):
+        try:
+            c = client.containers.get(container_id)
+            raw = c.stats(stream=False)
+
+            # CPU %
+            cpu = raw.get("cpu_stats", {})
+            precpu = raw.get("precpu_stats", {})
+            cpu_usage = cpu.get("cpu_usage", {}).get("total_usage", 0)
+            precpu_usage = precpu.get("cpu_usage", {}).get("total_usage", 0)
+            sys_usage = cpu.get("system_cpu_usage", 0)
+            presys_usage = precpu.get("system_cpu_usage", 0)
+            num_cpus = cpu.get("online_cpus") or len(cpu.get("cpu_usage", {}).get("percpu_usage") or []) or 1
+            cpu_delta = cpu_usage - precpu_usage
+            sys_delta = sys_usage - presys_usage
+            cpu_pct = round((cpu_delta / sys_delta) * num_cpus * 100, 1) if sys_delta > 0 else 0.0
+
+            # Memory
+            mem = raw.get("memory_stats", {})
+            mem_used = mem.get("usage", 0)
+            cache = mem.get("stats", {}).get("cache", 0)
+            mem_used = max(0, mem_used - cache)
+            mem_limit = mem.get("limit", 0)
+
+            return inst_id, {
+                "cpu_pct": cpu_pct,
+                "num_cpus": num_cpus,
+                "mem_used_mb": round(mem_used / (1024 * 1024)),
+                "mem_limit_mb": round(mem_limit / (1024 * 1024)),
+            }
+        except Exception:
+            return inst_id, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(len(targets), 8)) as ex:
+        futures = {ex.submit(_fetch, iid, cid): iid for iid, cid in targets.items()}
+        for f in as_completed(futures):
+            inst_id, stat = f.result()
+            if stat is not None:
+                results[inst_id] = stat
+
+    # Attach GPU labels and CPU quota (derived from config, no container inspection needed)
+    for inst_id in targets:
+        labels = _gpu_labels(inst_id)
+        with instances_lock:
+            inst = instances.get(inst_id)
+            threads = inst.get("config", {}).get("threads") if inst else None
+        cpu_quota = int(threads) if threads else None
+        entry = results.setdefault(inst_id, {})
+        entry["gpus"] = labels
+        entry["cpu_quota"] = cpu_quota
+
+    return jsonify(results)
+
 
 @bp.route("/api/next-port")
 def api_next_port():
@@ -493,6 +730,7 @@ def api_instances_create():
         n_gpu_layers=int(body.get("n_gpu_layers", -1)),
         ctx_size=ctx_size,
         threads=body.get("threads"),
+        memory_limit=body.get("memory_limit", "").strip() or None,
         parallel=body.get("parallel"),
         extra_args=body.get("extra_args", "").strip(),
         gpu_devices=body.get("gpu_devices", "").strip() or None,
@@ -550,9 +788,6 @@ def api_instances_restart(inst_id):
             "confirm_required": True,
         }), 409
 
-    # Release any old proxy/gate reservations before we pick ports for the
-    # replacement instance. This lets restarts reuse the same public port and
-    # avoids stale reservations influencing internal-port selection.
     release_instance_reservations(inst_id)
     with instances_lock:
         instances.pop(inst_id, None)
@@ -574,6 +809,7 @@ def api_instances_restart(inst_id):
         n_gpu_layers=config.get("n_gpu_layers", -1),
         ctx_size=config.get("ctx_size", 4096),
         threads=config.get("threads"),
+        memory_limit=config.get("memory_limit") or None,
         parallel=config.get("parallel"),
         extra_args=config.get("extra_args", ""),
         gpu_devices=config.get("gpu_devices"),
@@ -587,6 +823,7 @@ def api_instances_restart(inst_id):
         proxy_sampling_top_k=int(config.get("proxy_sampling_top_k", 40)),
         proxy_sampling_top_p=float(config.get("proxy_sampling_top_p", 0.95)),
         proxy_sampling_presence_penalty=float(config.get("proxy_sampling_presence_penalty", 0.0)),
+        proxy_sampling_repeat_penalty=float(config.get("proxy_sampling_repeat_penalty", 0.0)),
     )
     if err:
         _restore_restarted_instance(old)
@@ -615,6 +852,9 @@ def api_instances_remove(inst_id):
             return jsonify({"error": "Not found"}), 404
         if inst["status"] not in ("stopped",):
             return jsonify({"error": "Instance must be stopped before removing"}), 409
+        container_id = inst.get("container_id")
+    if container_id:
+        stop_container(container_id)
     release_instance_reservations(inst_id)
     with instances_lock:
         instances.pop(inst_id, None)

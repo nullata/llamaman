@@ -8,10 +8,6 @@ if [[ ! -f ${versionFile} ]]; then
 fi
 
 version=$(cat ${versionFile})
-docker build -f Dockerfile.cuda \
-  -t nullata/llamaman:cuda-latest \
-  -t nullata/llamaman:cuda-${version} .
-
-docker build -f Dockerfile.rocm \
-  -t nullata/llamaman:rocm-latest \
-  -t nullata/llamaman:rocm-${version} .
+docker build -f Dockerfile \
+  -t nullata/llamaman:latest \
+  -t nullata/llamaman:${version} .

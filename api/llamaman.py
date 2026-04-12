@@ -22,10 +22,8 @@ from config import (
 )
 from core.helpers import (
     find_available_port,
-    is_llama_pid,
-    is_pid_alive,
+    is_container_running,
     model_name_from_path,
-    scan_llama_server_processes,
 )
 from core.proxy_sampling import apply_proxy_sampling_overrides
 from api.models import detect_quant, discover_models
@@ -169,16 +167,10 @@ def _evict_llamaman_instances_if_needed(incoming_embedding_model: bool = False) 
     return _count_running_instances() < LLAMAMAN_MAX_MODELS
 
 
-def _wait_for_model_ready(port: int, timeout: float) -> bool:
-    """Poll the llama-server /health endpoint until it reports ready.
-
-    Unlike wait_for_healthy (which is used during launch bookkeeping), this
-    is designed for the request-forwarding path: it retries with a short
-    interval so the first inference request is sent as soon as the model is
-    actually ready.
-    """
+def _wait_for_model_ready(host: str, port: int, timeout: float) -> bool:
+    """Poll the llama-server /health endpoint until it reports ready."""
     from api.instances import wait_for_healthy
-    return wait_for_healthy(port, timeout=timeout)
+    return wait_for_healthy(host, port, timeout=timeout)
 
 
 def _ensure_model_running(
@@ -263,6 +255,7 @@ def _ensure_model_running(
             n_gpu_layers=preset.get("n_gpu_layers", -1),
             ctx_size=preset.get("ctx_size", 4096),
             threads=preset.get("threads"),
+            memory_limit=preset.get("memory_limit") or None,
             parallel=preset.get("parallel"),
             extra_args=preset.get("extra_args", ""),
             gpu_devices=preset.get("gpu_devices") or None,
@@ -315,19 +308,17 @@ def _llamaman_model_entry(m: dict) -> dict:
     }
 
 
-def _instance_process_alive(inst: dict) -> bool:
-    proc = inst.get("_process")
-    if proc is not None:
-        return proc.poll() is None
-
-    pid = inst.get("pid", 0)
-    return pid > 0 and is_pid_alive(pid) and is_llama_pid(pid)
+def _instance_container_alive(inst: dict) -> bool:
+    container_id = inst.get("container_id")
+    if not container_id:
+        return False
+    return is_container_running(container_id)
 
 
-def _probe_server_ready(port: int) -> bool:
+def _probe_server_ready(host: str, port: int) -> bool:
     try:
         resp = http_requests.get(
-            f"http://localhost:{port}/health",
+            f"http://{host}:{port}/health",
             timeout=HEALTH_CHECK_TIMEOUT,
         )
         return resp.json().get("status") == "ok"
@@ -378,12 +369,13 @@ def _list_loaded_models() -> list[dict]:
         tracked_instances = [dict(inst) for inst in instances.values()]
 
     for inst in tracked_instances:
-        if not _instance_process_alive(inst):
+        if not _instance_container_alive(inst):
             continue
 
         model_path = inst["model_path"]
-        server_port = inst.get("_internal_port") or inst["port"]
-        ready = _probe_server_ready(server_port)
+        server_host = inst.get("_server_host", "localhost")
+        server_port = inst.get("_server_port") or inst.get("_internal_port") or inst["port"]
+        ready = _probe_server_ready(server_host, server_port)
         key = os.path.realpath(model_path)
         existing = live_by_path.get(key)
 
@@ -394,18 +386,6 @@ def _list_loaded_models() -> list[dict]:
             "model_path": model_path,
             "started_at": inst.get("started_at"),
             "ready": ready,
-        }
-
-    for info in scan_llama_server_processes():
-        model_path = info["model_path"]
-        key = os.path.realpath(model_path)
-        if key in live_by_path and live_by_path[key].get("ready"):
-            continue
-
-        live_by_path[key] = {
-            "model_path": model_path,
-            "started_at": None,
-            "ready": _probe_server_ready(info["port"]),
         }
 
     loaded = [
@@ -463,7 +443,7 @@ def _translate_to_openai(body: dict) -> dict:
     return openai_body
 
 
-def _stream_llamaman(port: int, openai_body: dict, model_name: str,
+def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
                      mode: str = "chat", inst_id: str | None = None):
     t_start = time.monotonic()
     t_first_token = None
@@ -506,7 +486,7 @@ def _stream_llamaman(port: int, openai_body: dict, model_name: str,
         for _attempt in range(3):
             try:
                 resp = http_requests.post(
-                    f"http://localhost:{port}/v1/chat/completions",
+                    f"http://{host}:{port}/v1/chat/completions",
                     json=openai_body,
                     stream=True,
                     timeout=REQUEST_TIMEOUT,
@@ -589,7 +569,7 @@ def _stream_llamaman(port: int, openai_body: dict, model_name: str,
             update_instance_stats(inst_id, tokens_per_sec=tps, ttft_ms=ttft)
 
 
-def _proxy_non_streaming(port: int, openai_body: dict, model_name: str,
+def _proxy_non_streaming(host: str, port: int, openai_body: dict, model_name: str,
                          mode: str = "chat", inst_id: str | None = None):
     t_start = time.monotonic()
     openai_body["stream"] = False
@@ -599,7 +579,7 @@ def _proxy_non_streaming(port: int, openai_body: dict, model_name: str,
     for _attempt in range(3):
         try:
             resp = http_requests.post(
-                f"http://localhost:{port}/v1/chat/completions",
+                f"http://{host}:{port}/v1/chat/completions",
                 json=openai_body,
                 timeout=REQUEST_TIMEOUT,
             )
@@ -669,13 +649,14 @@ def _handle_request(mode: str = "chat"):
     if inst.get("config", {}).get("embedding_model"):
         return jsonify({"error": f"model '{model_name}' is embedding-only and cannot handle chat completions"}), 422
 
-    server_port = inst.get("_internal_port") or inst["port"]
+    server_host = inst.get("_server_host", "localhost")
+    server_port = inst.get("_server_port") or inst.get("_internal_port") or inst["port"]
 
     # If the model was just launched it may still be loading.  Wait for it
     # to become healthy before forwarding the request so the prompt is not
     # lost to a connection-refused error.
     if inst.get("status") != "healthy":
-        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+        if not _wait_for_model_ready(server_host, server_port, MODEL_LOAD_TIMEOUT):
             return jsonify({"error": "model launched but did not become healthy in time"}), 500
         with instances_lock:
             if inst["id"] in instances:
@@ -703,7 +684,7 @@ def _handle_request(mode: str = "chat"):
         if stream:
             def _gated_stream():
                 try:
-                    yield from _stream_llamaman(server_port, openai_body, model_name, mode, inst_id=inst["id"])
+                    yield from _stream_llamaman(server_host, server_port, openai_body, model_name, mode, inst_id=inst["id"])
                 finally:
                     if gate:
                         gate.release()
@@ -713,7 +694,7 @@ def _handle_request(mode: str = "chat"):
                 mimetype="application/x-ndjson",
             )
 
-        result = _proxy_non_streaming(server_port, openai_body, model_name, mode, inst_id=inst["id"])
+        result = _proxy_non_streaming(server_host, server_port, openai_body, model_name, mode, inst_id=inst["id"])
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -805,12 +786,13 @@ def llamaman_v1_chat():
     if inst.get("config", {}).get("embedding_model"):
         return jsonify({"error": {"message": f"model '{model_name}' is embedding-only and cannot handle chat completions"}}), 422
 
-    server_port = inst.get("_internal_port") or inst["port"]
+    server_host = inst.get("_server_host", "localhost")
+    server_port = inst.get("_server_port") or inst.get("_internal_port") or inst["port"]
     inst_id = inst["id"]
 
     # Wait for the model to finish loading before forwarding
     if inst.get("status") != "healthy":
-        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+        if not _wait_for_model_ready(server_host, server_port, MODEL_LOAD_TIMEOUT):
             return jsonify({"error": {"message": "model launched but did not become healthy in time"}}), 500
         with instances_lock:
             if inst_id in instances:
@@ -835,7 +817,7 @@ def llamaman_v1_chat():
         for _attempt in range(3):
             try:
                 resp = http_requests.post(
-                    f"http://localhost:{server_port}/v1/chat/completions",
+                    f"http://{server_host}:{server_port}/v1/chat/completions",
                     json=body,
                     stream=stream,
                     timeout=REQUEST_TIMEOUT,
@@ -896,11 +878,12 @@ def llamaman_v1_embeddings():
     if not inst.get("config", {}).get("embedding_model"):
         return jsonify({"error": {"message": f"model '{model_name}' is not configured as an embedding model"}}), 422
 
-    server_port = inst.get("_internal_port") or inst["port"]
+    server_host = inst.get("_server_host", "localhost")
+    server_port = inst.get("_server_port") or inst.get("_internal_port") or inst["port"]
     inst_id = inst["id"]
 
     if inst.get("status") != "healthy":
-        if not _wait_for_model_ready(server_port, MODEL_LOAD_TIMEOUT):
+        if not _wait_for_model_ready(server_host, server_port, MODEL_LOAD_TIMEOUT):
             return jsonify({"error": {"message": "model launched but did not become healthy in time"}}), 500
         with instances_lock:
             if inst_id in instances:
@@ -911,7 +894,7 @@ def llamaman_v1_embeddings():
     for _attempt in range(3):
         try:
             resp = http_requests.post(
-                f"http://localhost:{server_port}/v1/embeddings",
+                f"http://{server_host}:{server_port}/v1/embeddings",
                 json=body,
                 timeout=REQUEST_TIMEOUT,
             )

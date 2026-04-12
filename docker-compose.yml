@@ -1,24 +1,38 @@
 services:
-  # --- NVIDIA CUDA (default) ---
   llamaman:
     build:
       context: .
-      dockerfile: Dockerfile.cuda
+      dockerfile: Dockerfile
     ports:
       # Management UI
       - "5000:5000"
       # Llamaman proxy (Ollama-compatible API for OpenWebUI)
       - "42069:42069"
-      # llama-server instance ports
+      # llama-server instance ports / per-instance idle proxy ports.
+      # Maps host:8000-8020 → llamaman container:9000-9020 to avoid conflicts
+      # with sibling llama-server containers that bind host:8000-8020 directly
+      # in non-proxy mode. Proxy-enabled instances use the 9000-9020 internal
+      # range and are reached via the Docker network, not these host bindings.
       - "8000-8020:9000-9020"
     volumes:
       - ./models:/models
       - ./data:/data
       - ./logs:/tmp/llama-logs
+      # Docker socket - allows llamaman to spawn llama-server containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # GPU monitoring (AMD + Intel Arc): exposes VRAM and utilization via sysfs.
+      # Safe to leave on NVIDIA hosts - it is ignored when pynvml is available.
+      - /sys/class/drm:/sys/class/drm:ro
     environment:
       - MODELS_DIR=/models
       - DATA_DIR=/data
       - LOGS_DIR=/tmp/llama-logs
+      # HOST_MODELS_DIR / HOST_LOGS_DIR must be the real paths on the Docker HOST.
+      # The Docker daemon uses these as bind-mount sources when spawning sibling
+      # llama-server containers, so they must resolve on the host, not inside
+      # the llamaman container.  Set these to match your volume source paths above.
+      - HOST_MODELS_DIR=./models
+      - HOST_LOGS_DIR=./logs
       - PORT_RANGE_START=8000
       - PORT_RANGE_END=8020
       - INTERNAL_PORT_RANGE_START=9000
@@ -29,63 +43,45 @@ services:
       - HEALTH_CHECK_TIMEOUT=3
       - MODEL_LOAD_TIMEOUT=300
       - REQUEST_TIMEOUT=300
+      # Docker-in-Docker settings
+      #
+      # LLAMA_IMAGE: which llama.cpp image to use for spawned containers.
+      # Auto-selected from detected GPU vendor if not set.
+      #   NVIDIA:     ghcr.io/ggml-org/llama.cpp:server-cuda   (default)
+      #   AMD ROCm:   ghcr.io/ggml-org/llama.cpp:server-rocm
+      #   Intel Arc:  ghcr.io/ggml-org/llama.cpp:server-sycl
+      #   CPU only:   ghcr.io/ggml-org/llama.cpp:server
+      - LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
+      - LLAMA_NETWORK=llamaman-net
+      - LLAMA_CONTAINER_PREFIX=llamaman-
+      # GPU_TYPE: override GPU auto-detection ("cuda", "rocm", "intel").
+      # Leave unset to let llamaman probe the host automatically.
+      # - GPU_TYPE=cuda
+      # Restrict which GPUs are visible to all llama-server containers.
+      # Comma-separated indices, e.g. "0,1,3". Leave unset to expose all GPUs.
+      # - LLAMA_GPU_DEVICES=0,1,3
       # Uncomment to set a fixed Flask session secret (required for multi-replica)
       # - SECRET_KEY=change-me-to-something-random
       # Uncomment to use MariaDB/MySQL instead of JSON file storage
       # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
+    # NVIDIA native GPU monitoring (pynvml) - uncomment on NVIDIA hosts.
+    # Grants the llamaman container read-only NVML access (no compute).
+    # Remove or leave commented on AMD/Intel hosts.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           capabilities: [utility]
+    networks:
+      - llamaman-net
     # depends_on:
     #   mariadb:
     #     condition: service_healthy
     #     required: false
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
 
-  # --- AMD ROCm ---
-  # To use: docker compose --profile rocm up --build llamaman-rocm
-  # Do NOT run both services simultaneously - they share the same ports.
-  llamaman-rocm:
-    build:
-      context: .
-      dockerfile: Dockerfile.rocm
-    profiles: [rocm]
-    ports:
-      - "5000:5000"
-      - "42069:42069"
-      - "8000-8020:8000-8020"
-    volumes:
-      - ./models:/models
-      - ./data:/data
-      - ./logs:/tmp/llama-logs
-    environment:
-      - MODELS_DIR=/models
-      - DATA_DIR=/data
-      - LOGS_DIR=/tmp/llama-logs
-      - PORT_RANGE_START=8000
-      - PORT_RANGE_END=8020
-      - INTERNAL_PORT_RANGE_START=9000
-      - INTERNAL_PORT_RANGE_END=9020
-      - LLAMAMAN_MAX_MODELS=1
-      - LLAMAMAN_PROXY_PORT=42069
-      - LLAMAMAN_IDLE_TIMEOUT=0
-      - HEALTH_CHECK_TIMEOUT=3
-      - MODEL_LOAD_TIMEOUT=300
-      - REQUEST_TIMEOUT=300
-      # - SECRET_KEY=change-me-to-something-random
-      # - DATABASE_URL=mysql+pymysql://llama:password@mariadb:3306/llamaman
-    # depends_on:
-    #   mariadb:
-    #     condition: service_healthy
-    #     required: false
-    devices:
-      - /dev/kfd:/dev/kfd
-      - /dev/dri:/dev/dri
-    group_add:
-      - video
-      - render
-    restart: unless-stopped
+networks:
+  llamaman-net:
+    driver: bridge
+    name: llamaman-net

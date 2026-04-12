@@ -279,6 +279,7 @@ async function selectModel(model, el) {
       if (p.n_gpu_layers != null) document.getElementById('f-gpu-layers').value = p.n_gpu_layers;
       if (p.ctx_size != null && ctxField) ctxField.value = p.ctx_size;
       document.getElementById('f-threads').value = p.threads || '';
+      document.getElementById('f-memory-limit').value = p.memory_limit || '';
       document.getElementById('f-parallel').value = p.parallel || '';
       document.getElementById('f-extra').value = p.extra_args || '';
       document.getElementById('f-gpu-devices').value = p.gpu_devices || '';
@@ -292,6 +293,7 @@ async function selectModel(model, el) {
       document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
       document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
       document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
+      document.getElementById('f-proxy-sampling-repeat-penalty').value = p.proxy_sampling_repeat_penalty ?? 0.0;
       document.getElementById('f-note').value = p.note || '';
       if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
       toast('Preset loaded', 'info');

@@ -15,6 +15,41 @@ async function pollInstances() {
   } catch (e) { /* ignore */ }
 }
 
+async function pollContainerStats() {
+  try {
+    const res = await apiFetch('/api/instances/container-stats');
+    if (!res || !res.ok) return;
+    const data = await res.json();
+    containerStats = data;
+    // Update resource lines in existing cards without a full re-render
+    Object.entries(data).forEach(([id, stat]) => {
+      const el = document.querySelector(`.instance-card[data-id="${id}"] .inst-resource-line`);
+      if (el) el.innerHTML = formatResourceLine(stat);
+    });
+  } catch (e) { /* ignore */ }
+}
+
+function formatResourceLine(stat) {
+  if (!stat) return '';
+  const parts = [];
+  if (stat.cpu_pct != null) {
+    const coreStr = stat.cpu_quota
+      ? ` / ${stat.cpu_quota} core${stat.cpu_quota !== 1 ? 's' : ''}`
+      : '';
+    parts.push(`CPU ${stat.cpu_pct.toFixed(1)}%${coreStr}`);
+  }
+  if (stat.mem_used_mb != null) {
+    const usedGb = (stat.mem_used_mb / 1024).toFixed(1);
+    const limGb  = (stat.mem_limit_mb / 1024).toFixed(1);
+    parts.push(stat.mem_limit_mb > 0
+      ? `RAM ${usedGb} GB / ${limGb} GB`
+      : `RAM ${usedGb} GB`);
+  }
+  if (stat.gpus && stat.gpus.length > 0) {
+    parts.push(stat.gpus.join(', '));
+  }
+  return parts.join(' &nbsp;·&nbsp; ');
+}
 
 function renderInstances() {
   const container = document.getElementById('instance-container');
@@ -79,6 +114,10 @@ function renderInstances() {
     const statsLine = statsItems.length > 0
       ? `<div class="meta inst-meta-accent">${statsItems.join(' · ')}</div>` : '';
 
+    const resourceContent = (inst.status === 'healthy' || inst.status === 'starting')
+      ? formatResourceLine(containerStats[inst.id] || null) : '';
+    const resourceLine = `<div class="meta inst-resource-line">${resourceContent}</div>`;
+
     // Queue indicator
     const q = inst.queue;
     let queueLine = '';
@@ -103,6 +142,7 @@ function renderInstances() {
       <div class="model">${escHtml(inst.model_name)}</div>
       <div class="meta">${portLine} &nbsp;·&nbsp; PID ${inst.pid} &nbsp;·&nbsp; ${uptime}</div>
       ${statsLine}
+      ${resourceLine}
       ${queueLine}
     </div>
     <span class="status-badge ${statusClass}">${inst.status}</span>
@@ -256,6 +296,7 @@ function readLaunchForm() {
     proxy_sampling_top_k: parseInt(document.getElementById('f-proxy-sampling-top-k').value, 10),
     proxy_sampling_top_p: parseFloat(document.getElementById('f-proxy-sampling-top-p').value),
     proxy_sampling_presence_penalty: parseFloat(document.getElementById('f-proxy-sampling-presence-penalty').value),
+    proxy_sampling_repeat_penalty: parseFloat(document.getElementById('f-proxy-sampling-repeat-penalty').value),
   };
   if (!Number.isFinite(body.proxy_sampling_temperature) || body.proxy_sampling_temperature < 0 || body.proxy_sampling_temperature > 2) {
     throw new Error('Proxy-side temperature must be between 0 and 2');
@@ -269,8 +310,13 @@ function readLaunchForm() {
   if (!Number.isFinite(body.proxy_sampling_presence_penalty) || body.proxy_sampling_presence_penalty < -2 || body.proxy_sampling_presence_penalty > 2) {
     throw new Error('Proxy-side presence penalty must be between -2 and 2');
   }
+  if (!Number.isFinite(body.proxy_sampling_repeat_penalty) || body.proxy_sampling_repeat_penalty < 0 || body.proxy_sampling_repeat_penalty > 2) {
+    throw new Error('Proxy-side repeat penalty must be between 0 and 2');
+  }
   const threads = document.getElementById('f-threads').value.trim();
   if (threads) body.threads = parseInt(threads);
+  const memoryLimit = document.getElementById('f-memory-limit').value.trim();
+  if (memoryLimit) body.memory_limit = memoryLimit;
   const parallel = document.getElementById('f-parallel').value.trim();
   if (parallel) body.parallel = parseInt(parallel);
   return body;

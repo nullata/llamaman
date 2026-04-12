@@ -27,47 +27,8 @@ class LlamamanPsTests(unittest.TestCase):
             instances.clear()
             instances.update(self._saved_instances)
 
-    @patch("api.llamaman._probe_server_ready", return_value=True)
-    @patch(
-        "api.llamaman.discover_models",
-        return_value=[
-            {
-                "path": "/models/beta.gguf",
-                "type": "gguf",
-                "quant": "Q4_K_M",
-                "size_bytes": 42,
-            }
-        ],
-    )
-    @patch(
-        "api.llamaman.scan_llama_server_processes",
-        return_value=[
-            {
-                "pid": 1234,
-                "model_path": "/models/beta.gguf",
-                "port": 9001,
-                "config": {},
-            }
-        ],
-    )
-    def test_api_ps_includes_live_untracked_processes(
-        self,
-        _scan_mock,
-        _discover_mock,
-        _probe_mock,
-    ):
-        resp = self.client.get("/api/ps")
-
-        self.assertEqual(resp.status_code, 200)
-        data = resp.get_json()
-        self.assertEqual(len(data["models"]), 1)
-        self.assertEqual(data["models"][0]["name"], "beta")
-        self.assertEqual(data["models"][0]["size"], 42)
-        self.assertEqual(data["models"][0]["details"]["quantization_level"], "Q4_K_M")
-
-    @patch("api.llamaman.scan_llama_server_processes", return_value=[])
     @patch("api.llamaman._probe_server_ready", return_value=False)
-    @patch("api.llamaman._instance_process_alive", return_value=True)
+    @patch("api.llamaman._instance_container_alive", return_value=True)
     @patch(
         "api.llamaman.discover_models",
         return_value=[
@@ -79,12 +40,11 @@ class LlamamanPsTests(unittest.TestCase):
             }
         ],
     )
-    def test_api_ps_includes_live_tracked_process_with_stale_status(
+    def test_api_ps_includes_live_tracked_container_with_stale_status(
         self,
         _discover_mock,
         _alive_mock,
         _probe_mock,
-        _scan_mock,
     ):
         with instances_lock:
             instances["inst-1"] = {
@@ -93,7 +53,9 @@ class LlamamanPsTests(unittest.TestCase):
                 "model_path": "/models/alpha.gguf",
                 "port": 8000,
                 "status": "stopped",
-                "pid": 9999,
+                "container_id": "abc123",
+                "container_name": "llamaman-inst1",
+                "_server_host": "llamaman-inst1",
                 "started_at": 1000,
                 "config": {},
             }

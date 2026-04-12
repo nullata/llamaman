@@ -646,6 +646,31 @@ select option {
   color: #a78bfa;
 }
 
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+}
+
+.badge-ok {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--green);
+}
+
+.badge-warn {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--yellow);
+}
+
+.badge-info {
+  background: rgba(99, 102, 241, 0.15);
+  color: #818cf8;
+}
+
 .inst-actions {
   display: flex;
   gap: 8px;

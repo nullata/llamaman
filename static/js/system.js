@@ -632,3 +632,262 @@ if (autoRetryFailedDownloadsToggle) {
   autoRetryFailedDownloadsToggle.addEventListener('change', updateDownloadRetryCountState);
   updateDownloadRetryCountState();
 }
+
+// -------------------------------------------------------------------------
+// Docker Image Management
+// -------------------------------------------------------------------------
+
+let _pullStatusInterval = null;
+
+async function loadImages() {
+  const list = document.getElementById('images-list');
+  if (!list) return;
+  try {
+    const res = await apiFetch('/api/images');
+    if (!res) return;
+    const data = await res.json();
+
+    const autoToggle = document.getElementById('s-image-auto-update');
+    if (autoToggle) autoToggle.checked = !!data.auto_update_enabled;
+    const intervalInput = document.getElementById('s-image-update-interval');
+    if (intervalInput) intervalInput.value = data.auto_update_interval_hours ?? 24;
+
+    if (!data.images || data.images.length === 0) {
+      list.innerHTML = '<div class="list-empty-state">No images tracked yet.</div>';
+      return;
+    }
+
+    list.innerHTML = '';
+    data.images.forEach(img => {
+      const isActive = img.name === data.current_image;
+      const digestShort = img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : '-';
+      const sizeMb = img.size_mb ? `${img.size_mb} MB` : '-';
+      const pulledAt = img.last_pulled_at
+        ? new Date(img.last_pulled_at * 1000).toLocaleString()
+        : 'Never';
+      const presentBadge = img.present
+        ? '<span class="badge badge-ok">local</span>'
+        : '<span class="badge badge-warn">not pulled</span>';
+      const activeBadge = isActive ? '<span class="badge badge-info">active</span>' : '';
+
+      const item = document.createElement('div');
+      item.className = 'dl-item';
+      item.innerHTML = `
+        <div class="dl-item-top">
+          <span class="dl-item-name"><strong>${escHtml(img.name)}</strong> ${activeBadge} ${presentBadge}</span>
+          <code class="list-meta-code" title="${escHtml(img.digest || '')}">${escHtml(digestShort)}</code>
+          <span class="list-meta-date">${escHtml(sizeMb)}</span>
+          <span class="list-meta-date">pulled: ${escHtml(pulledAt)}</span>
+          <button class="btn-xs btn-image-pull" data-image="${escHtml(img.name)}">
+            <i class="fa-solid fa-arrow-down-to-line"></i> Pull
+          </button>
+          <button class="btn-xs danger btn-image-delete" data-image="${escHtml(img.name)}"${isActive ? ' disabled title="Cannot remove the active image"' : ''}>
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </div>
+      `;
+      list.appendChild(item);
+    });
+
+    list.querySelectorAll('.btn-image-pull').forEach(btn => {
+      btn.addEventListener('click', () => triggerImagePull(btn.dataset.image));
+    });
+    list.querySelectorAll('.btn-image-delete').forEach(btn => {
+      btn.addEventListener('click', () => deleteImage(btn.dataset.image));
+    });
+  } catch (e) {
+    const list = document.getElementById('images-list');
+    if (list) list.innerHTML = '<div class="list-empty-state">Error loading images.</div>';
+  }
+}
+
+async function triggerImagePull(imageName) {
+  const statusEl = document.getElementById('image-pull-status');
+  try {
+    const res = await apiFetch('/api/images/pull', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageName }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(`Pull failed: ${data.error}`, 'error');
+      return;
+    }
+    toast(`Pulling ${imageName}…`, 'info');
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = 'Pulling…';
+    }
+    startPullStatusPolling();
+  } catch (e) {
+    toast('Error starting pull: ' + e.message, 'error');
+  }
+}
+
+function startPullStatusPolling() {
+  if (_pullStatusInterval) return;
+  _pullStatusInterval = setInterval(pollPullStatus, 2000);
+}
+
+async function pollPullStatus() {
+  const statusEl = document.getElementById('image-pull-status');
+  try {
+    const res = await apiFetch('/api/images/pull-status');
+    if (!res) return;
+    const state = await res.json();
+
+    if (state.status === 'pulling') {
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.textContent = `Pulling ${state.image}: ${state.message}`;
+      }
+      return;
+    }
+
+    // Done or error - stop polling
+    clearInterval(_pullStatusInterval);
+    _pullStatusInterval = null;
+
+    if (state.status === 'done') {
+      if (statusEl) statusEl.hidden = true;
+      toast(`Image updated: ${state.image}`, 'success');
+      await loadImages();
+    } else if (state.status === 'error') {
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.textContent = `Pull error: ${state.message}`;
+      }
+      toast(`Pull error: ${state.message}`, 'error');
+    } else {
+      if (statusEl) statusEl.hidden = true;
+    }
+  } catch (e) { /* ignore */ }
+}
+
+async function saveImageSettings() {
+  const autoToggle = document.getElementById('s-image-auto-update');
+  const intervalInput = document.getElementById('s-image-update-interval');
+  if (!autoToggle || !intervalInput) return;
+
+  try {
+    const res = await apiFetch('/api/images/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        auto_update_enabled: autoToggle.checked,
+        auto_update_interval_hours: parseInt(intervalInput.value) || 24,
+      }),
+    });
+    if (res && res.ok) {
+      const status = document.getElementById('image-settings-status');
+      if (status) {
+        status.textContent = 'Saved.';
+        setTimeout(() => { status.textContent = ''; }, 2000);
+      }
+    }
+  } catch (e) {
+    toast('Error saving image settings: ' + e.message, 'error');
+  }
+}
+
+async function deleteImage(imageName) {
+  if (!confirm(`Remove image "${imageName}" from Docker?\n\nThis deletes the local image. You can re-pull it at any time.`)) return;
+  try {
+    const res = await apiFetch('/api/images', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageName }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(`Remove failed: ${data.error}`, 'error');
+      return;
+    }
+    toast(`Removed: ${imageName}`, 'success');
+    await loadImages();
+  } catch (e) {
+    toast('Error removing image: ' + e.message, 'error');
+  }
+}
+
+const btnSaveImageSettings = document.getElementById('btn-save-image-settings');
+if (btnSaveImageSettings) btnSaveImageSettings.addEventListener('click', saveImageSettings);
+
+const btnRestoreModelsJson = document.getElementById('btn-restore-models-json');
+const fileRestoreModels = document.getElementById('f-restore-models-file');
+
+if (btnRestoreModelsJson && fileRestoreModels) {
+  btnRestoreModelsJson.addEventListener('click', () => fileRestoreModels.click());
+  fileRestoreModels.addEventListener('change', async () => {
+    const file = fileRestoreModels.files[0];
+    if (!file) return;
+    fileRestoreModels.value = '';
+
+    let entries;
+    try {
+      entries = JSON.parse(await file.text());
+    } catch (e) {
+      toast('Invalid JSON file', 'error');
+      return;
+    }
+    if (!Array.isArray(entries)) {
+      toast('Expected a JSON array', 'error');
+      return;
+    }
+
+    btnRestoreModelsJson.disabled = true;
+    const originalHtml = btnRestoreModelsJson.innerHTML;
+    btnRestoreModelsJson.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Restoring...';
+
+    try {
+      const res = await apiFetch('/api/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(entries),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast(`Restore failed: ${data.error}`, 'error');
+        return;
+      }
+
+      const { summary, results } = data;
+      toast(`Restore: ${summary.present} present, ${summary.queued} queued, ${summary.missing} no source${summary.errors ? `, ${summary.errors} errors` : ''}`, 'info');
+
+      const container = document.getElementById('restore-results');
+      const list = document.getElementById('restore-results-list');
+      if (container && list) {
+        const statusBadge = (r) => {
+          if (r.status === 'present') return '<span class="badge badge-ok">present</span>';
+          if (r.status === 'queued') return '<span class="badge badge-info">download queued</span>';
+          if (r.status === 'missing') return '<span class="badge badge-warn">no source</span>';
+          return `<span class="badge badge-warn">error: ${escHtml(r.error || '')}</span>`;
+        };
+        list.innerHTML = results.map(r => `
+          <div class="dl-item">
+            <div class="dl-item-top">
+              <span class="dl-item-name">${escHtml(r.name)}</span>
+              ${statusBadge(r)}
+            </div>
+          </div>
+        `).join('');
+        container.hidden = false;
+      }
+    } catch (e) {
+      toast('Restore error: ' + e.message, 'error');
+    } finally {
+      btnRestoreModelsJson.disabled = false;
+      btnRestoreModelsJson.innerHTML = originalHtml;
+    }
+  });
+}
+
+const btnPullByName = document.getElementById('btn-pull-by-name');
+if (btnPullByName) btnPullByName.addEventListener('click', () => {
+  const input = document.getElementById('f-image-pull-name');
+  const name = input ? input.value.trim() : '';
+  if (!name) { toast('Enter an image name first', 'error'); return; }
+  triggerImagePull(name);
+  if (input) input.value = '';
+});
