@@ -279,6 +279,7 @@ async function selectModel(model, el) {
       if (p.n_gpu_layers != null) document.getElementById('f-gpu-layers').value = p.n_gpu_layers;
       if (p.ctx_size != null && ctxField) ctxField.value = p.ctx_size;
       document.getElementById('f-threads').value = p.threads || '';
+      document.getElementById('f-memory-limit').value = p.memory_limit || '';
       document.getElementById('f-parallel').value = p.parallel || '';
       document.getElementById('f-extra').value = p.extra_args || '';
       document.getElementById('f-gpu-devices').value = p.gpu_devices || '';

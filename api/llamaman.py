@@ -255,6 +255,7 @@ def _ensure_model_running(
             n_gpu_layers=preset.get("n_gpu_layers", -1),
             ctx_size=preset.get("ctx_size", 4096),
             threads=preset.get("threads"),
+            memory_limit=preset.get("memory_limit") or None,
             parallel=preset.get("parallel"),
             extra_args=preset.get("extra_args", ""),
             gpu_devices=preset.get("gpu_devices") or None,

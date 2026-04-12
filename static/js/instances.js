@@ -271,6 +271,8 @@ function readLaunchForm() {
   }
   const threads = document.getElementById('f-threads').value.trim();
   if (threads) body.threads = parseInt(threads);
+  const memoryLimit = document.getElementById('f-memory-limit').value.trim();
+  if (memoryLimit) body.memory_limit = memoryLimit;
   const parallel = document.getElementById('f-parallel').value.trim();
   if (parallel) body.parallel = parseInt(parallel);
   return body;
