@@ -158,7 +158,15 @@ def stop_container(container_id: str, timeout: int = 10) -> None:
     import docker
     try:
         c = get_docker_client().containers.get(container_id)
+    except docker.errors.NotFound:
+        return
+    except Exception:
+        return
+    try:
         c.stop(timeout=timeout)
+    except Exception:
+        pass
+    try:
         c.remove(force=True)
     except docker.errors.NotFound:
         pass

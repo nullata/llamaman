@@ -56,6 +56,7 @@ def _run_cleanup() -> None:
         cleanup_patch["instances_last_run_at"] = now
         max_age_s = (cleanup.get("instances_max_age_hours") or 24) * 3600
         cutoff = now - max_age_s
+        container_ids_to_stop = []
         with instances_lock:
             to_remove = [
                 iid for iid, inst in instances.items()
@@ -63,9 +64,14 @@ def _run_cleanup() -> None:
                 and inst.get("started_at", 0) < cutoff
             ]
             for iid in to_remove:
+                cid = instances[iid].get("container_id")
+                if cid:
+                    container_ids_to_stop.append(cid)
                 release_instance_reservations(iid)
                 del instances[iid]
                 logger.info("Cleanup: removed instance %s", iid)
+        for cid in container_ids_to_stop:
+            stop_container(cid)
         if to_remove:
             changed = True
 
