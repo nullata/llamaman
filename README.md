@@ -15,6 +15,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Model backup and restore** - export all model metadata and presets to JSON, restore on any instance by re-queuing missing downloads automatically
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
+- **Container resource monitoring** - live CPU%, core quota, RAM usage, and GPU assignment per running instance card
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -24,6 +25,16 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Proxy sampling overrides** - force temperature, top-k, top-p, presence penalty, and repeat penalty on all proxied requests, configurable per model preset
 - **Docker image management** - pull any llama.cpp image by name, delete old local images from the Settings UI
 
+## What's New
+
+- **Universal GPU support** - single `Dockerfile` and image for NVIDIA, AMD (ROCm), Intel Arc, and CPU. GPU vendor is auto-detected at startup; `GPU_TYPE` overrides if needed. `LLAMA_IMAGE` is also auto-selected from the detected vendor.
+- **Native GPU monitoring** - VRAM and utilization are queried inside the llamaman container directly (pynvml for NVIDIA, `/sys/class/drm` sysfs for AMD/Intel Arc), so the GPU panel works without a running llama-server instance.
+- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment, updated every 3 seconds via a separate poll.
+- **Docker image management** - pull any llama.cpp image by name, delete old local images, all from the Settings UI.
+- **Model backup and restore** - export all model metadata and presets to JSON; restore on any instance with downloads queued automatically for missing models.
+- **Repeat penalty in proxy sampling overrides** - configurable per preset, default 0 (disabled).
+- **CPU quota + memory limit** - setting CPU Threads now also applies a Docker `nano_cpus` quota; a new Memory Limit field caps container RAM.
+
 ## How It Works
 
 LlamaMan is a lightweight Python web app with no dependency on llama.cpp itself. When you launch a model, LlamaMan uses the Docker socket to spawn a `ghcr.io/ggml-org/llama.cpp:server-*` container as a sibling on the host. GPU passthrough, port binding, and volume mounts are configured per-container via the Docker SDK.
@@ -31,7 +42,7 @@ LlamaMan is a lightweight Python web app with no dependency on llama.cpp itself.
 ```
 Host machine
 ├── Docker daemon
-│   ├── llamaman container        (Python only - no GPU, no llama.cpp)
+│   ├── llamaman container        (Python only - no GPU usage - only monitoring, no llama.cpp)
 │   │   └── /var/run/docker.sock  (talks to Docker daemon)
 │   ├── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
 │   └── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
@@ -54,11 +65,22 @@ docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
 
 ## Quick Start
 
+Before starting, edit `docker-compose.yml` and set the two host path variables to match your volume mount sources:
+
+```yaml
+- HOST_MODELS_DIR=/absolute/host/path/to/models
+- HOST_LOGS_DIR=/absolute/host/path/to/logs
+```
+
+These must be the real paths on the Docker host. LlamaMan passes them to the Docker daemon when spawning sibling llama-server containers, so they must resolve on the host — not inside the llamaman container.
+
 **NVIDIA:**
 ```bash
 docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
 docker compose up --build
 ```
+
+For native VRAM monitoring, also uncomment the `deploy.resources.reservations` block in `docker-compose.yml`.
 
 **AMD (ROCm):**
 ```bash
@@ -359,9 +381,11 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODELS_DIR` | `/models` | Directory scanned for model files |
+| `MODELS_DIR` | `/models` | Directory scanned for model files (container path) |
 | `DATA_DIR` | `/data` | Directory for persistent config/state (JSON files) |
-| `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs |
+| `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs (container path) |
+| `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume — must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
+| `HOST_LOGS_DIR` | _(same as `LOGS_DIR`)_ | **Host-side** absolute path of the logs volume. Same requirement as `HOST_MODELS_DIR`. |
 | `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool |
 | `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool |
 | `INTERNAL_PORT_RANGE_START` | `9000` | Start of internal port pool used when proxy mode is enabled |
@@ -571,3 +595,6 @@ This work would not be possible without the work of [ggml-org/llama.cpp](https:/
 ## License
 
 LlamaMan is licensed under the [Elastic License 2.0](LICENSE). You may use, copy, distribute, and modify the software, subject to the following limitations:
+
+- You may not provide the software to third parties as a hosted or managed service where the service gives users access to a substantial set of its features or functionality.
+- You may not remove or obscure any licensing, copyright, or other notices of the licensor.
