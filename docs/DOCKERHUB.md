@@ -11,7 +11,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Preset configs** - save/load per-model launch settings
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Instance management** - stop, restart, remove, view live-streamed logs
-- **GPU VRAM indicator** - per-GPU usage bars via nvidia-smi or rocm-smi
+- **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -22,47 +22,70 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 
 ## Tags
 
-- `cuda-latest`, `cuda-<version>` - NVIDIA GPU (CUDA) support
-- `rocm-latest`, `rocm-<version>` - AMD GPU (ROCm) support *(experimental, not tested)*
-- 🆕 `turboquant-cuda-latest`, `turboquant-cuda-<version>` 🆕 - [Experimental branch](https://github.com/nullata/llamaman/tree/tq-cuda-experimental) for the llama.cpp TurboQuant implementation. *(⚠️ early stage experimental feature)*
-
-⚠️ **Dev note:** I do not own an AMD GPU and I am unable to test the ROCm functionality. I encourage users who can test the ROCm images to leave some feedback on the GitHub page for the project. For that matter, **ALL user feedback is welcome.**
+- `latest`, `<version>` - Universal image, auto-detects GPU vendor (NVIDIA / AMD / Intel Arc / CPU)
 
 ## Quick Start
 
-### NVIDIA (CUDA)
+Pull the llama.cpp image for your GPU first, then run LlamaMan.
+
+### NVIDIA
 
 ```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
+
 docker run -d \
   --name llamaman \
-  --gpus all \
   -p 5000:5000 \
   -p 42069:42069 \
   -p 8000-8020:9000-9020 \
   -v ./models:/models \
   -v ./data:/data \
   -v ./logs:/tmp/llama-logs \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /sys/class/drm:/sys/class/drm:ro \
+  -e LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda \
   --restart unless-stopped \
-  nullata/llamaman:cuda-latest
+  nullata/llamaman:latest
 ```
 
-### AMD (ROCm) - experimental (untested)
+### AMD (ROCm)
 
 ```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-rocm
+
 docker run -d \
   --name llamaman \
-  --device /dev/kfd \
-  --device /dev/dri \
-  --group-add video \
-  --group-add render \
   -p 5000:5000 \
   -p 42069:42069 \
   -p 8000-8020:9000-9020 \
   -v ./models:/models \
   -v ./data:/data \
   -v ./logs:/tmp/llama-logs \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /sys/class/drm:/sys/class/drm:ro \
+  -e LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-rocm \
   --restart unless-stopped \
-  nullata/llamaman:rocm-latest
+  nullata/llamaman:latest
+```
+
+### Intel Arc
+
+```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-sycl
+
+docker run -d \
+  --name llamaman \
+  -p 5000:5000 \
+  -p 42069:42069 \
+  -p 8000-8020:9000-9020 \
+  -v ./models:/models \
+  -v ./data:/data \
+  -v ./logs:/tmp/llama-logs \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /sys/class/drm:/sys/class/drm:ro \
+  -e LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-sycl \
+  --restart unless-stopped \
+  nullata/llamaman:latest
 ```
 
 ### Docker Compose
@@ -70,7 +93,7 @@ docker run -d \
 ```yaml
 services:
   llamaman:
-    image: nullata/llamaman:cuda-latest
+    image: nullata/llamaman:latest
     ports:
       - "5000:5000"
       - "42069:42069"
@@ -79,13 +102,10 @@ services:
       - ./models:/models
       - ./data:/data
       - ./logs:/tmp/llama-logs
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /sys/class/drm:/sys/class/drm:ro
+    environment:
+      - LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
     restart: unless-stopped
 ```
 
@@ -109,6 +129,9 @@ services:
 
 | Variable | Default | Description |
 |---|---|---|
+| `LLAMA_IMAGE` | *(auto)* | llama.cpp server image for spawned containers. Auto-selected from detected GPU vendor if not set. Set explicitly to pin a version or backend (`server-cuda`, `server-rocm`, `server-sycl`, `server`). |
+| `GPU_TYPE` | *(auto-detect)* | Override GPU vendor detection: `cuda`, `rocm`, or `intel`. Leave unset to auto-detect. |
+| `LLAMA_GPU_DEVICES` | *(all)* | Comma-separated GPU indices visible to spawned containers, e.g. `0,1`. Not supported on Intel Arc. |
 | `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent **chat** models via the proxy. Uses LRU eviction when the limit is reached. `0` = unlimited. |
 | `LLAMAMAN_IDLE_TIMEOUT` | `0` | Idle timeout in minutes for proxy-managed instances. Stopped instances auto-restart on next request. `0` = disabled. |
 | `LLAMAMAN_PROXY_PORT` | `42069` | Port for the Ollama-compatible proxy. |
@@ -123,7 +146,7 @@ services:
 | `DATABASE_URL` | *(unset)* | MariaDB/MySQL connection string (e.g. `mysql+pymysql://user:pass@host/db`). Unset = JSON file storage. |
 | `HEALTH_CHECK_TIMEOUT` | `3` | Timeout in seconds for instance health checks. |
 | `MODEL_LOAD_TIMEOUT` | `300` | Seconds to wait for a model to become healthy during launch/relaunch. Increase for very large models. |
-| `REQUEST_TIMEOUT` | `300` | Timeout in seconds for upstream requests to llama-server and gate acquire waits. Increase if requests are being cut off under heavy concurrency. |
+| `REQUEST_TIMEOUT` | `300` | Timeout in seconds for upstream requests to llama-server and gate acquire waits. |
 
 ## First Launch
 
@@ -138,7 +161,7 @@ The UI provides automatic cleanup under **Settings >> Cleanup Settings**:
 
 - **Auto-clean completed/failed downloads** - removes download records older than a configurable number of hours (default: 24). Only affects completed, failed, or cancelled downloads - active downloads are never touched.
 - **Auto-clean stopped instances** - removes stopped instance records older than a configurable number of hours (default: 24). Only affects stopped instances - running instances are never removed.
-- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their actual OS process. Records whose backing process is no longer alive are marked stopped. Configurable check interval (default: 5 minutes).
+- **Auto-remove stale instance records** - periodically checks all `starting`/`healthy`/`sleeping` instance records against their backing Docker container. Records whose container is no longer running are marked stopped. Configurable check interval (default: 5 minutes).
 
 Cleanup runs periodically in the background. These settings only remove or update records in the UI/state - they do not delete model files.
 
@@ -224,10 +247,12 @@ For sleeping instances, a mismatched model name returns 404 without waking the i
 
 ## Requirements
 
-- Docker with GPU support:
-  - **NVIDIA**: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed and working (`docker run --gpus all` must work)
-  - **AMD**: [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) *(experimental, not tested)*
-- A supported GPU (llama.cpp can fall back to CPU/RAM when VRAM is insufficient)
+- Docker with access to `/var/run/docker.sock`
+- GPU support (one of):
+  - **NVIDIA**: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed (`docker run --gpus all` must work)
+  - **AMD**: [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/)
+  - **Intel Arc**: `/dev/dri` accessible, user in `video`/`render` groups
+  - **CPU only**: no GPU required
 
 ## Links
 

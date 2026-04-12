@@ -660,8 +660,8 @@ async function loadImages() {
     list.innerHTML = '';
     data.images.forEach(img => {
       const isActive = img.name === data.current_image;
-      const digestShort = img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : '—';
-      const sizeMb = img.size_mb ? `${img.size_mb} MB` : '—';
+      const digestShort = img.digest ? img.digest.replace('sha256:', '').slice(0, 12) : '-';
+      const sizeMb = img.size_mb ? `${img.size_mb} MB` : '-';
       const pulledAt = img.last_pulled_at
         ? new Date(img.last_pulled_at * 1000).toLocaleString()
         : 'Never';
@@ -739,7 +739,7 @@ async function pollPullStatus() {
       return;
     }
 
-    // Done or error — stop polling
+    // Done or error - stop polling
     clearInterval(_pullStatusInterval);
     _pullStatusInterval = null;
 

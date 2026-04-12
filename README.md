@@ -13,7 +13,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Preset configs** - save/load per-model launch settings
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Instance management** - stop, restart, remove, view live-streamed logs
-- **GPU VRAM indicator** - per-GPU usage bars queried from running llama-server containers
+- **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -29,14 +29,14 @@ LlamaMan is a lightweight Python web app with no dependency on llama.cpp itself.
 ```
 Host machine
 ├── Docker daemon
-│   ├── llamaman container        (Python only — no GPU, no llama.cpp)
+│   ├── llamaman container        (Python only - no GPU, no llama.cpp)
 │   │   └── /var/run/docker.sock  (talks to Docker daemon)
 │   ├── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
 │   └── llamaman-<id> container   (llama.cpp:server-cuda, GPU attached)
 └── GPU hardware
 ```
 
-**To update llama.cpp** — no llamaman rebuild needed:
+**To update llama.cpp** - no llamaman rebuild needed:
 ```bash
 docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
 ```
@@ -45,27 +45,38 @@ docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
 
 - Docker with access to `/var/run/docker.sock`
 - **One** of:
-  - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for CUDA / NVIDIA GPUs
-  - [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) for AMD GPUs — **experimental, not tested**
-- The llama.cpp server image pulled on the host (see Quick Start)
+  - [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for NVIDIA GPUs
+  - [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/) for AMD GPUs
+  - Intel Arc with `/dev/dri` access for Intel GPUs
+- The matching llama.cpp server image pulled on the host (see Quick Start)
 
 ## Quick Start
 
-**NVIDIA (CUDA):**
-
+**NVIDIA:**
 ```bash
-# Pull the llama.cpp image first (only needed once, or when you want to update it)
 docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
-
 docker compose up --build
 ```
 
-**AMD (ROCm)** - experimental, not tested:
-
+**AMD (ROCm):**
 ```bash
 docker pull ghcr.io/ggml-org/llama.cpp:server-rocm
+# Edit docker-compose.yml: set LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-rocm
+docker compose up --build
+```
 
-docker compose --profile rocm up --build llamaman-rocm
+**Intel Arc:**
+```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server-sycl
+# Edit docker-compose.yml: set LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-sycl
+docker compose up --build
+```
+
+**CPU only:**
+```bash
+docker pull ghcr.io/ggml-org/llama.cpp:server
+# Edit docker-compose.yml: set LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server
+docker compose up --build
 ```
 
 - **Management UI**: http://localhost:5000
@@ -74,7 +85,7 @@ docker compose --profile rocm up --build llamaman-rocm
 
 On first launch, visit the UI to create an admin account via `/setup`.
 
-> **Note:** LlamaMan needs access to the Docker socket (`/var/run/docker.sock`) to spawn llama-server containers. This is already configured in `docker-compose.yml`. Be aware of the security implications — a container with Docker socket access has the ability to manage other containers on the host.
+> **Note:** LlamaMan needs access to the Docker socket (`/var/run/docker.sock`) to spawn llama-server containers. This is already configured in `docker-compose.yml`. Be aware of the security implications - a container with Docker socket access has the ability to manage other containers on the host.
 
 ## Authentication
 
@@ -152,7 +163,9 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Max Queue Depth** | `200` | Maximum number of requests that can wait in the queue when `Max Concurrent` is active. Requests beyond this limit are rejected with HTTP 429. |
 | **Share Queue** | off | When enabled, multiple proxy-managed instances of the **same model** share a single request queue. Incoming requests are distributed across instances as slots become available, providing simple load balancing. |
 | **Embedding Model** | off | Marks the instance as an embedding model. Embedding instances are **excluded** from the `LLAMAMAN_MAX_MODELS` count and will never be evicted by the proxy's LRU policy. |
-| **GPU Devices** | _(global default)_ | Comma-separated GPU indices to make visible to this container (e.g. `0,1`). Overrides `LLAMA_GPU_DEVICES` for this instance. Leave blank to use the global default. |
+| **CPU Threads** | _(auto)_ | Sets both `--threads N` for llama-server and the container's CPU quota (`--cpus N`). Leave blank to let the container and llama-server use all available cores. |
+| **Memory Limit** | _(none)_ | Hard memory cap for the llama-server container (e.g. `32g`, `8192m`). Equivalent to `deploy.resources.limits.memory` in Docker Compose. Leave blank for no limit. |
+| **GPU Devices** | _(global default)_ | Comma-separated GPU indices to make visible to this container (e.g. `0,1`). Overrides `LLAMA_GPU_DEVICES` for this instance. Leave blank to use the global default. Not supported on Intel Arc. |
 | **Extra Args** | _(empty)_ | Additional flags passed directly to llama-server (e.g. `--flash-attn`). |
 | **Proxy Sampling Overrides** | off | When enabled, the proxy forces the configured sampling parameters on every request forwarded to this instance, regardless of what the client sends. |
 | **Temperature** | `0.8` | Sampling temperature to enforce (range: `0.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
@@ -170,11 +183,15 @@ The gate tracks active and queued request counts, which are visible in the insta
 
 ## GPU Stats
 
-LlamaMan has no GPU dependency itself. GPU metrics (VRAM usage, utilization) are collected by running `nvidia-smi` or `rocm-smi` inside a live llama-server container via `docker exec`. This means:
+LlamaMan queries GPU VRAM and utilization natively - no running llama-server instance required.
 
-- GPU stats are available as long as at least one llama-server container is running
-- When all instances are stopped or sleeping, the GPU panel shows unavailable
-- Stats reflect the full host GPU state, not just what one container is using
+| Vendor | Method | Requirement |
+|---|---|---|
+| NVIDIA | `pynvml` (NVML library direct) | Uncomment the `deploy.resources.reservations` block in `docker-compose.yml` to grant the llamaman container NVIDIA toolkit `utility` capability |
+| AMD | `/sys/class/drm` sysfs | `/sys/class/drm:ro` volume mount (included in `docker-compose.yml` by default) |
+| Intel Arc | `/sys/class/drm` sysfs | Same mount as AMD |
+
+When native access is not configured, LlamaMan falls back to exec-ing `nvidia-smi` / `rocm-smi` inside a running llama-server container (previous behavior). Stats always reflect the full host GPU state, not just a single container's usage.
 
 ## Idle Timeout
 
@@ -341,11 +358,11 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLAMA_IMAGE` | `ghcr.io/ggml-org/llama.cpp:server-cuda` | llama.cpp Docker image used for all spawned containers. Change this to switch llama.cpp versions or GPU backends without rebuilding LlamaMan. |
+| `LLAMA_IMAGE` | _(auto)_ | llama.cpp Docker image used for all spawned containers. Auto-selected from the detected GPU vendor if not set (`server-cuda` / `server-rocm` / `server-sycl` / `server`). Set explicitly to pin a specific image or version. |
 | `LLAMA_NETWORK` | `llamaman-net` | Docker network that LlamaMan and all llama-server containers are attached to. Created automatically if it doesn't exist. |
 | `LLAMA_CONTAINER_PREFIX` | `llamaman-` | Name prefix for spawned llama-server containers (e.g. `llamaman-abcd1234`). |
-| `GPU_TYPE` | `cuda` | GPU backend: `cuda` for NVIDIA, `rocm` for AMD. Controls how GPU devices are passed to containers. |
-| `LLAMA_GPU_DEVICES` | _(unset = all)_ | Comma-separated GPU indices visible to all spawned llama-server containers, e.g. `0,1,3`. Unset exposes all GPUs. Per-instance **GPU Devices** overrides this when set. |
+| `GPU_TYPE` | _(auto-detect)_ | Override GPU vendor detection: `cuda` (NVIDIA), `rocm` (AMD), `intel` (Intel Arc). Leave unset to let LlamaMan probe the host automatically. |
+| `LLAMA_GPU_DEVICES` | _(unset = all)_ | Comma-separated GPU indices visible to all spawned llama-server containers, e.g. `0,1,3`. Unset exposes all GPUs. Per-instance **GPU Devices** overrides this when set. Not supported on Intel Arc. |
 
 ## REST API
 
@@ -393,6 +410,7 @@ All endpoints return and accept JSON.
   "n_gpu_layers": -1,
   "ctx_size": 4096,
   "threads": null,
+  "memory_limit": null,
   "parallel": null,
   "extra_args": "--flash-attn",
   "gpu_devices": "",
@@ -408,7 +426,11 @@ All endpoints return and accept JSON.
 }
 ```
 
-`gpu_devices`: comma-separated GPU indices for this instance (e.g. `"0"`, `"0,1"`). Leave empty to use `LLAMA_GPU_DEVICES` (or all GPUs if that is also unset).
+`gpu_devices`: comma-separated GPU indices for this instance (e.g. `"0"`, `"0,1"`). Leave empty to use `LLAMA_GPU_DEVICES` (or all GPUs if that is also unset). Not supported on Intel Arc.
+
+`memory_limit`: Docker memory cap string, e.g. `"32g"` or `"8192m"`. Omit or `null` for no limit.
+
+`threads`: when set, applies `--threads N` to llama-server **and** sets the container CPU quota to N cores.
 
 ### Downloads
 
@@ -486,7 +508,7 @@ Leave `filename` blank to download the full repository.
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/api/system-info` | CPU usage, core count, RAM usage |
-| `GET` | `/api/gpu-info` | Per-GPU VRAM and utilization (queried from a running llama-server container) |
+| `GET` | `/api/gpu-info` | Per-GPU VRAM and utilization (native query; falls back to container exec if native access is not configured) |
 | `GET` | `/health` | Health check (`{"status": "ok"}`) - always open, no auth required |
 
 ### Ollama-compatible (llamaman)
@@ -507,11 +529,13 @@ Leave `filename` blank to download the full repository.
 | Symptom | Fix |
 |---|---|
 | Instance stuck on **starting** | Check logs via the Logs button. Common causes: OOM, model path typo, corrupt GGUF, image not pulled. |
-| _"Docker image not found"_ | Run `docker pull ghcr.io/ggml-org/llama.cpp:server-cuda` (or `server-rocm`) on the host before starting LlamaMan. |
+| _"Docker image not found"_ | Pull the matching image: `docker pull ghcr.io/ggml-org/llama.cpp:server-cuda` (NVIDIA), `server-rocm` (AMD), `server-sycl` (Intel Arc), or `server` (CPU). |
 | _"Docker API error"_ on launch | Ensure `/var/run/docker.sock` is mounted into the LlamaMan container (it is by default in `docker-compose.yml`). |
 | No GPU / CUDA error | Ensure the NVIDIA Container Toolkit is installed and `docker run --gpus all` works on the host. |
-| No GPU / ROCm error | Ensure `/dev/kfd` and `/dev/dri` exist on the host and your user is in the `video`/`render` groups. The ROCm image is experimental and not tested. |
-| GPU stats show unavailable | GPU stats require at least one llama-server container to be running. Launch a model first. |
+| No GPU / ROCm error | Ensure `/dev/kfd` and `/dev/dri` exist on the host and your user is in the `video`/`render` groups. |
+| No GPU / Intel Arc error | Ensure `/dev/dri` is accessible and your user is in the `video`/`render` groups. |
+| GPU stats show unavailable | For NVIDIA: uncomment the `deploy.resources.reservations` block in `docker-compose.yml`. For AMD/Intel: ensure `/sys/class/drm:ro` is mounted (default in `docker-compose.yml`). |
+| Wrong GPU vendor detected | Set `GPU_TYPE=cuda`, `GPU_TYPE=rocm`, or `GPU_TYPE=intel` in the environment to override auto-detection. |
 | Port conflict | The form auto-suggests an unused port; adjust if needed. |
 | Model not showing in OpenWebUI | Ensure `OLLAMA_BASE_URL` points to `http://llamaman:42069`. Check `/api/tags` returns models. |
 | OpenWebUI gets 401 errors | `require_auth` is on (default). Create an API key in the UI and set `OPENAI_API_KEYS` in OpenWebUI's environment. |

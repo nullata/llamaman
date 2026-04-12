@@ -56,7 +56,7 @@ def _do_pull(image_name: str) -> None:
             with _pull_lock:
                 _pull_state["message"] = last_status
 
-        # Pull succeeded — refresh local image metadata
+        # Pull succeeded - refresh local image metadata
         now = time.time()
         digest = None
         size_bytes = None
