@@ -5,3 +5,4 @@ gunicorn
 sqlalchemy
 pymysql
 docker
+pynvml

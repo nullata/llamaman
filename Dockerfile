@@ -30,10 +30,8 @@ ENV INTERNAL_PORT_RANGE_END=9020
 ENV LLAMAMAN_MAX_MODELS=1
 ENV LLAMAMAN_PROXY_PORT=42069
 ENV LLAMAMAN_IDLE_TIMEOUT=0
-ENV LLAMA_IMAGE=ghcr.io/ggml-org/llama.cpp:server-cuda
 ENV LLAMA_NETWORK=llamaman-net
 ENV LLAMA_CONTAINER_PREFIX=llamaman-
-ENV GPU_TYPE=cuda
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -f http://localhost:5000/health || exit 1

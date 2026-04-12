@@ -147,100 +147,92 @@ def _exec_in_container(container, cmd: str) -> str | None:
         return None
 
 
-def _query_nvidia() -> list[dict] | None:
-    """Query NVIDIA GPUs by running nvidia-smi inside a live llama-server container."""
+def _query_via_container_exec() -> list[dict] | None:
+    """Fallback: query GPUs by exec-ing smi tools inside a running llama-server container."""
     container = _get_running_llama_container()
     if container is None:
         return None
 
+    # Try nvidia-smi
     output = _exec_in_container(
         container,
         "nvidia-smi --query-gpu=index,name,memory.used,memory.total,memory.free,utilization.gpu"
         " --format=csv,noheader,nounits",
     )
-    if not output:
-        return None
+    if output:
+        gpus = []
+        for line in output.splitlines():
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) >= 6:
+                try:
+                    gpus.append({
+                        "index": int(parts[0]),
+                        "name": parts[1],
+                        "memory_used_mb": int(parts[2]),
+                        "memory_total_mb": int(parts[3]),
+                        "memory_free_mb": int(parts[4]),
+                        "utilization_pct": int(parts[5]),
+                    })
+                except (ValueError, IndexError):
+                    continue
+        if gpus:
+            return gpus
 
-    gpus = []
-    for line in output.splitlines():
-        parts = [p.strip() for p in line.split(",")]
-        if len(parts) >= 6:
-            try:
-                gpus.append({
-                    "index": int(parts[0]),
-                    "name": parts[1],
-                    "memory_used_mb": int(parts[2]),
-                    "memory_total_mb": int(parts[3]),
-                    "memory_free_mb": int(parts[4]),
-                    "utilization_pct": int(parts[5]),
-                })
-            except (ValueError, IndexError):
-                continue
-    return gpus if gpus else None
-
-
-def _query_rocm() -> list[dict] | None:
-    """Query AMD GPUs by running rocm-smi inside a live llama-server container."""
-    container = _get_running_llama_container()
-    if container is None:
-        return None
-
+    # Try rocm-smi
     output = _exec_in_container(
         container,
         "rocm-smi --showmeminfo vram --showuse --showproductname --csv",
     )
-    if not output:
-        return None
+    if output:
+        lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+        if len(lines) >= 2:
+            header = [h.strip().lower() for h in lines[0].split(",")]
+            gpus = []
+            for line in lines[1:]:
+                cols = [c.strip() for c in line.split(",")]
+                if len(cols) < len(header):
+                    continue
+                row = dict(zip(header, cols))
+                idx = row.get("device", row.get("gpu", str(len(gpus))))
+                name = row.get("card series", row.get("card model", row.get("name", "AMD GPU")))
+                vram_used = row.get("vram used", row.get("used vram (b)", "0"))
+                vram_total = row.get("vram total", row.get("total vram (b)", "0"))
+                gpu_use = row.get("gpu use (%)", row.get("gpu busy", "0"))
+                try:
+                    used = int(vram_used)
+                    total = int(vram_total)
+                except ValueError:
+                    continue
+                if total > 1_000_000:
+                    used = used // (1024 * 1024)
+                    total = total // (1024 * 1024)
+                gpus.append({
+                    "index": int(idx) if str(idx).isdigit() else len(gpus),
+                    "name": name,
+                    "memory_used_mb": used,
+                    "memory_total_mb": total,
+                    "memory_free_mb": total - used,
+                    "utilization_pct": int(gpu_use.replace("%", "")) if gpu_use.replace("%", "").isdigit() else 0,
+                })
+            if gpus:
+                return gpus
 
-    lines = [l.strip() for l in output.splitlines() if l.strip()]
-    if len(lines) < 2:
-        return None
-
-    header = [h.strip().lower() for h in lines[0].split(",")]
-    gpus = []
-    for line in lines[1:]:
-        cols = [c.strip() for c in line.split(",")]
-        if len(cols) < len(header):
-            continue
-        row = dict(zip(header, cols))
-        idx = row.get("device", row.get("gpu", str(len(gpus))))
-        name = row.get("card series", row.get("card model", row.get("name", "AMD GPU")))
-        vram_used = row.get("vram used", row.get("used vram (b)", "0"))
-        vram_total = row.get("vram total", row.get("total vram (b)", "0"))
-        gpu_use = row.get("gpu use (%)", row.get("gpu busy", "0"))
-
-        try:
-            used = int(vram_used)
-            total = int(vram_total)
-        except ValueError:
-            continue
-
-        if total > 1_000_000:
-            used = used // (1024 * 1024)
-            total = total // (1024 * 1024)
-
-        gpus.append({
-            "index": int(idx) if str(idx).isdigit() else len(gpus),
-            "name": name,
-            "memory_used_mb": used,
-            "memory_total_mb": total,
-            "memory_free_mb": total - used,
-            "utilization_pct": int(gpu_use.replace("%", "")) if gpu_use.replace("%", "").isdigit() else 0,
-        })
-    return gpus if gpus else None
+    return None
 
 
 @bp.route("/api/gpu-info")
 def api_gpu_info():
     try:
-        gpus = _query_nvidia()
+        from core.gpu import query_gpus
+        gpus = query_gpus()
         if gpus is not None:
             return jsonify({"gpus": gpus})
 
-        gpus = _query_rocm()
+        # Fallback: exec into a running llama-server container
+        gpus = _query_via_container_exec()
         if gpus is not None:
             return jsonify({"gpus": gpus})
 
-        return jsonify({"error": "No running llama-server containers found", "gpus": []}), 503
+        return jsonify({"gpus": [], "error": "No GPU data available - mount /sys/class/drm:ro (AMD/Intel) or enable NVIDIA toolkit utility capability"}), 200
     except Exception as e:
         return jsonify({"error": str(e), "gpus": []}), 500

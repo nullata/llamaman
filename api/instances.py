@@ -11,7 +11,6 @@ import requests as http_requests
 from flask import Blueprint, Response, jsonify, request
 
 from config import (
-    GPU_TYPE,
     HEALTH_CHECK_TIMEOUT,
     HOST_LOGS_DIR,
     HOST_MODELS_DIR,
@@ -30,6 +29,7 @@ from config import (
     PORT_RANGE_START,
     logger,
 )
+from core.gpu import get_vendor
 from core.helpers import (
     build_llama_cmd, ensure_docker_network, find_available_port,
     get_docker_client, is_container_running, is_port_available,
@@ -83,6 +83,7 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
             "n_gpu_layers",
             "ctx_size",
             "threads",
+            "memory_limit",
             "parallel",
             "extra_args",
             "gpu_devices",
@@ -290,13 +291,28 @@ def _run_container(
         },
     )
 
-    if GPU_TYPE == "rocm":
+    threads = config.get("threads")
+    if threads:
+        kwargs["nano_cpus"] = int(float(threads) * 1e9)
+
+    memory_limit = config.get("memory_limit")
+    if memory_limit:
+        kwargs["mem_limit"] = memory_limit
+
+    vendor = get_vendor()
+    if vendor == "rocm":
         kwargs["devices"] = _make_rocm_devices()
         kwargs["group_add"] = ["video", "render"]
         effective_gpus = _resolve_gpu_devices(gpu_devices)
         if effective_gpus:
             kwargs.setdefault("environment", {})["ROCR_VISIBLE_DEVICES"] = effective_gpus
+    elif vendor == "intel":
+        # Intel Arc: /dev/dri access only (no /dev/kfd). Per-instance GPU
+        # selection is not supported for Intel (no SYCL_VISIBLE_DEVICES equivalent).
+        kwargs["devices"] = ["/dev/dri:/dev/dri"]
+        kwargs["group_add"] = ["video", "render"]
     else:
+        # NVIDIA (cuda) or unknown/CPU - use Docker device_requests
         kwargs["device_requests"] = _make_device_requests(gpu_devices)
 
     try:
@@ -397,7 +413,7 @@ def relaunch_sleeping_instance(inst_id: str) -> bool:
 
 
 def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
-                    threads=None, parallel=None, extra_args="",
+                    threads=None, memory_limit=None, parallel=None, extra_args="",
                     gpu_devices=None, idle_timeout_min=0,
                     max_concurrent=0, max_queue_depth=200,
                     share_queue=False, embedding_model=False,
@@ -429,6 +445,7 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
         "n_gpu_layers": n_gpu_layers,
         "ctx_size": ctx_size,
         "threads": threads,
+        "memory_limit": memory_limit,
         "parallel": parallel,
         "extra_args": extra_args,
         "gpu_devices": gpu_devices,
@@ -613,6 +630,7 @@ def api_instances_create():
         n_gpu_layers=int(body.get("n_gpu_layers", -1)),
         ctx_size=ctx_size,
         threads=body.get("threads"),
+        memory_limit=body.get("memory_limit", "").strip() or None,
         parallel=body.get("parallel"),
         extra_args=body.get("extra_args", "").strip(),
         gpu_devices=body.get("gpu_devices", "").strip() or None,
@@ -691,6 +709,7 @@ def api_instances_restart(inst_id):
         n_gpu_layers=config.get("n_gpu_layers", -1),
         ctx_size=config.get("ctx_size", 4096),
         threads=config.get("threads"),
+        memory_limit=config.get("memory_limit") or None,
         parallel=config.get("parallel"),
         extra_args=config.get("extra_args", ""),
         gpu_devices=config.get("gpu_devices"),
@@ -732,6 +751,9 @@ def api_instances_remove(inst_id):
             return jsonify({"error": "Not found"}), 404
         if inst["status"] not in ("stopped",):
             return jsonify({"error": "Instance must be stopped before removing"}), 409
+        container_id = inst.get("container_id")
+    if container_id:
+        stop_container(container_id)
     release_instance_reservations(inst_id)
     with instances_lock:
         instances.pop(inst_id, None)
