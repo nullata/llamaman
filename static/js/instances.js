@@ -33,7 +33,10 @@ function formatResourceLine(stat) {
   if (!stat) return '';
   const parts = [];
   if (stat.cpu_pct != null) {
-    parts.push(`CPU ${stat.cpu_pct.toFixed(1)}% / ${stat.num_cpus} core${stat.num_cpus !== 1 ? 's' : ''}`);
+    const coreStr = stat.cpu_quota
+      ? ` / ${stat.cpu_quota} core${stat.cpu_quota !== 1 ? 's' : ''}`
+      : '';
+    parts.push(`CPU ${stat.cpu_pct.toFixed(1)}%${coreStr}`);
   }
   if (stat.mem_used_mb != null) {
     const usedGb = (stat.mem_used_mb / 1024).toFixed(1);

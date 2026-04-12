@@ -669,13 +669,16 @@ def api_container_stats():
             if stat is not None:
                 results[inst_id] = stat
 
-    # Attach GPU labels (derived from config, no container inspection needed)
+    # Attach GPU labels and CPU quota (derived from config, no container inspection needed)
     for inst_id in targets:
         labels = _gpu_labels(inst_id)
-        if inst_id in results:
-            results[inst_id]["gpus"] = labels
-        else:
-            results[inst_id] = {"gpus": labels}
+        with instances_lock:
+            inst = instances.get(inst_id)
+            threads = inst.get("config", {}).get("threads") if inst else None
+        cpu_quota = int(threads) if threads else None
+        entry = results.setdefault(inst_id, {})
+        entry["gpus"] = labels
+        entry["cpu_quota"] = cpu_quota
 
     return jsonify(results)
 
