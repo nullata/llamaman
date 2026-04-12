@@ -27,6 +27,9 @@ if (refreshSystemBtn) refreshSystemBtn.addEventListener('click', loadSystemInfo)
 // Instance list refresh (every 5s, includes status from background poller)
 setInterval(pollInstances, 5000);
 
+// Container resource usage (CPU/memory) refresh (every 3s)
+setInterval(pollContainerStats, 3000);
+
 // Download status refresh (every 3s)
 setInterval(pollDownloads, 3000);
 
@@ -43,7 +46,7 @@ setInterval(refreshCleanupLastRan, 60000);
 loadModels();
 loadSystemInfo();
 loadGpuInfo();
-pollInstances().then(updatePortSuggestion);
+pollInstances().then(() => { updatePortSuggestion(); pollContainerStats(); });
 
 const params = new URLSearchParams(window.location.search);
 const presetModelPath = params.get('model_path');

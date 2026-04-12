@@ -10,7 +10,9 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **One-click launch** - configure GPU layers, context size, threads, multi-GPU, extra args
 - **Preset configs** - save/load per-model launch settings
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
+- **Model backup and restore** - export model metadata and presets to JSON, restore on any instance with downloads queued automatically for missing models
 - **Instance management** - stop, restart, remove, view live-streamed logs
+- **Container resource monitoring** - live CPU%, core count, and RAM usage per running instance
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
@@ -18,7 +20,8 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Require auth toggle** - enforce bearer token authentication on all endpoints (including model loading) or leave model endpoints open
 - **Persistent state** - instance history and configs survive container restarts
 - **Storage backends** - JSON files (default) or MariaDB/MySQL via SQLAlchemy
-- **Proxy sampling overrides** - force temperature, top-k, top-p, and presence penalty on all proxied requests, configurable per model preset
+- **Proxy sampling overrides** - force temperature, top-k, top-p, presence penalty, and repeat penalty on all proxied requests, configurable per model preset
+- **Docker image management** - pull any llama.cpp image by name, delete old local images from the UI
 
 ## Tags
 

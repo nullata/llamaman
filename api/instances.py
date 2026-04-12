@@ -586,6 +586,100 @@ def release_instance_reservations(inst_id: str) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
+@bp.route("/api/instances/container-stats", methods=["GET"])
+def api_container_stats():
+    """Return CPU% and memory usage for all healthy/starting containers in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import docker as docker_sdk
+
+    with instances_lock:
+        targets = {
+            inst_id: inst["container_id"]
+            for inst_id, inst in instances.items()
+            if inst.get("status") in ("healthy", "starting")
+            and inst.get("container_id")
+        }
+
+    if not targets:
+        return jsonify({})
+
+    # GPU info - query once, map per instance
+    from core.gpu import get_vendor, query_gpus
+    vendor = get_vendor()
+    all_gpus = query_gpus() or []  # [{index, name, ...}]
+    gpu_map = {g["index"]: g["name"] for g in all_gpus}
+
+    def _gpu_labels(inst_id: str) -> list[str]:
+        with instances_lock:
+            inst = instances.get(inst_id)
+            if not inst:
+                return []
+        if vendor == "intel":
+            name = gpu_map.get(0, "Intel Arc")
+            return [name]
+        if vendor not in ("cuda", "rocm") or not gpu_map:
+            return []
+        effective = _resolve_gpu_devices(inst.get("config", {}).get("gpu_devices"))
+        if effective:
+            indices = [int(x.strip()) for x in effective.split(",") if x.strip().isdigit()]
+        else:
+            indices = sorted(gpu_map.keys())
+        return [f"{gpu_map[i]} [{i}]" for i in indices if i in gpu_map]
+
+    client = get_docker_client()
+
+    def _fetch(inst_id: str, container_id: str):
+        try:
+            c = client.containers.get(container_id)
+            raw = c.stats(stream=False)
+
+            # CPU %
+            cpu = raw.get("cpu_stats", {})
+            precpu = raw.get("precpu_stats", {})
+            cpu_usage = cpu.get("cpu_usage", {}).get("total_usage", 0)
+            precpu_usage = precpu.get("cpu_usage", {}).get("total_usage", 0)
+            sys_usage = cpu.get("system_cpu_usage", 0)
+            presys_usage = precpu.get("system_cpu_usage", 0)
+            num_cpus = cpu.get("online_cpus") or len(cpu.get("cpu_usage", {}).get("percpu_usage") or []) or 1
+            cpu_delta = cpu_usage - precpu_usage
+            sys_delta = sys_usage - presys_usage
+            cpu_pct = round((cpu_delta / sys_delta) * num_cpus * 100, 1) if sys_delta > 0 else 0.0
+
+            # Memory
+            mem = raw.get("memory_stats", {})
+            mem_used = mem.get("usage", 0)
+            cache = mem.get("stats", {}).get("cache", 0)
+            mem_used = max(0, mem_used - cache)
+            mem_limit = mem.get("limit", 0)
+
+            return inst_id, {
+                "cpu_pct": cpu_pct,
+                "num_cpus": num_cpus,
+                "mem_used_mb": round(mem_used / (1024 * 1024)),
+                "mem_limit_mb": round(mem_limit / (1024 * 1024)),
+            }
+        except Exception:
+            return inst_id, None
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=min(len(targets), 8)) as ex:
+        futures = {ex.submit(_fetch, iid, cid): iid for iid, cid in targets.items()}
+        for f in as_completed(futures):
+            inst_id, stat = f.result()
+            if stat is not None:
+                results[inst_id] = stat
+
+    # Attach GPU labels (derived from config, no container inspection needed)
+    for inst_id in targets:
+        labels = _gpu_labels(inst_id)
+        if inst_id in results:
+            results[inst_id]["gpus"] = labels
+        else:
+            results[inst_id] = {"gpus": labels}
+
+    return jsonify(results)
+
+
 @bp.route("/api/next-port")
 def api_next_port():
     port = find_available_port()

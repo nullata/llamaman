@@ -15,6 +15,38 @@ async function pollInstances() {
   } catch (e) { /* ignore */ }
 }
 
+async function pollContainerStats() {
+  try {
+    const res = await apiFetch('/api/instances/container-stats');
+    if (!res || !res.ok) return;
+    const data = await res.json();
+    containerStats = data;
+    // Update resource lines in existing cards without a full re-render
+    Object.entries(data).forEach(([id, stat]) => {
+      const el = document.querySelector(`.instance-card[data-id="${id}"] .inst-resource-line`);
+      if (el) el.innerHTML = formatResourceLine(stat);
+    });
+  } catch (e) { /* ignore */ }
+}
+
+function formatResourceLine(stat) {
+  if (!stat) return '';
+  const parts = [];
+  if (stat.cpu_pct != null) {
+    parts.push(`CPU ${stat.cpu_pct.toFixed(1)}% / ${stat.num_cpus} core${stat.num_cpus !== 1 ? 's' : ''}`);
+  }
+  if (stat.mem_used_mb != null) {
+    const usedGb = (stat.mem_used_mb / 1024).toFixed(1);
+    const limGb  = (stat.mem_limit_mb / 1024).toFixed(1);
+    parts.push(stat.mem_limit_mb > 0
+      ? `RAM ${usedGb} GB / ${limGb} GB`
+      : `RAM ${usedGb} GB`);
+  }
+  if (stat.gpus && stat.gpus.length > 0) {
+    parts.push(stat.gpus.join(', '));
+  }
+  return parts.join(' &nbsp;·&nbsp; ');
+}
 
 function renderInstances() {
   const container = document.getElementById('instance-container');
@@ -79,6 +111,10 @@ function renderInstances() {
     const statsLine = statsItems.length > 0
       ? `<div class="meta inst-meta-accent">${statsItems.join(' · ')}</div>` : '';
 
+    const resourceContent = (inst.status === 'healthy' || inst.status === 'starting')
+      ? formatResourceLine(containerStats[inst.id] || null) : '';
+    const resourceLine = `<div class="meta inst-resource-line">${resourceContent}</div>`;
+
     // Queue indicator
     const q = inst.queue;
     let queueLine = '';
@@ -103,6 +139,7 @@ function renderInstances() {
       <div class="model">${escHtml(inst.model_name)}</div>
       <div class="meta">${portLine} &nbsp;·&nbsp; PID ${inst.pid} &nbsp;·&nbsp; ${uptime}</div>
       ${statsLine}
+      ${resourceLine}
       ${queueLine}
     </div>
     <span class="status-badge ${statusClass}">${inst.status}</span>
