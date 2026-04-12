@@ -681,6 +681,9 @@ async function loadImages() {
           <button class="btn-xs btn-image-pull" data-image="${escHtml(img.name)}">
             <i class="fa-solid fa-arrow-down-to-line"></i> Pull
           </button>
+          <button class="btn-xs danger btn-image-delete" data-image="${escHtml(img.name)}"${isActive ? ' disabled title="Cannot remove the active image"' : ''}>
+            <i class="fa-solid fa-trash"></i>
+          </button>
         </div>
       `;
       list.appendChild(item);
@@ -688,6 +691,9 @@ async function loadImages() {
 
     list.querySelectorAll('.btn-image-pull').forEach(btn => {
       btn.addEventListener('click', () => triggerImagePull(btn.dataset.image));
+    });
+    list.querySelectorAll('.btn-image-delete').forEach(btn => {
+      btn.addEventListener('click', () => deleteImage(btn.dataset.image));
     });
   } catch (e) {
     const list = document.getElementById('images-list');
@@ -785,5 +791,34 @@ async function saveImageSettings() {
   }
 }
 
+async function deleteImage(imageName) {
+  if (!confirm(`Remove image "${imageName}" from Docker?\n\nThis deletes the local image. You can re-pull it at any time.`)) return;
+  try {
+    const res = await apiFetch('/api/images', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: imageName }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast(`Remove failed: ${data.error}`, 'error');
+      return;
+    }
+    toast(`Removed: ${imageName}`, 'success');
+    await loadImages();
+  } catch (e) {
+    toast('Error removing image: ' + e.message, 'error');
+  }
+}
+
 const btnSaveImageSettings = document.getElementById('btn-save-image-settings');
 if (btnSaveImageSettings) btnSaveImageSettings.addEventListener('click', saveImageSettings);
+
+const btnPullByName = document.getElementById('btn-pull-by-name');
+if (btnPullByName) btnPullByName.addEventListener('click', () => {
+  const input = document.getElementById('f-image-pull-name');
+  const name = input ? input.value.trim() : '';
+  if (!name) { toast('Enter an image name first', 'error'); return; }
+  triggerImagePull(name);
+  if (input) input.value = '';
+});

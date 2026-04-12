@@ -233,6 +233,38 @@ def pull_image():
     return jsonify({"ok": True, "image": image_name})
 
 
+@bp.route("/api/images", methods=["DELETE"])
+def delete_image():
+    data = request.get_json(silent=True) or {}
+    image_name = (data.get("image") or "").strip()
+    if not image_name:
+        return jsonify({"error": "no image specified"}), 400
+
+    from core.helpers import get_docker_client
+    import docker
+
+    client = get_docker_client()
+    removed_from_docker = False
+    try:
+        client.images.remove(image_name, force=False)
+        removed_from_docker = True
+    except docker.errors.ImageNotFound:
+        pass
+    except docker.errors.APIError as e:
+        return jsonify({"error": str(e)}), 409
+
+    # Remove from tracked list
+    storage = get_storage()
+    settings = storage.get_settings()
+    docker_images = settings.setdefault("docker_images", {})
+    images_list = docker_images.get("images", [])
+    docker_images["images"] = [r for r in images_list if r.get("name") != image_name]
+    storage.save_settings(settings)
+
+    logger.info("Image removed: %s (docker=%s)", image_name, removed_from_docker)
+    return jsonify({"ok": True, "removed_from_docker": removed_from_docker})
+
+
 @bp.route("/api/images/settings", methods=["POST"])
 def save_image_settings():
     data = request.get_json(silent=True) or {}
