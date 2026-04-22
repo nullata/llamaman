@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, request
 
 from core.proxy_sampling import parse_proxy_sampling_config
+from core.state import instances, instances_lock, save_state
 from storage import get_storage
 
 bp = Blueprint("presets", __name__)
@@ -70,7 +71,33 @@ def api_preset_save(model_path):
         **proxy_sampling_config,
     }
     get_storage().save_preset(model_path, data)
+    _apply_live_preset_changes(model_path, data)
     return jsonify({"status": "saved"})
+
+
+def _apply_live_preset_changes(model_path: str, preset: dict) -> None:
+    """Update fields that take effect on a running instance without relaunch:
+    the reaper re-reads idle_timeout_min each tick, and refresh_gate picks up
+    queue changes. Everything else is baked into the container at launch."""
+    from proxy import refresh_gate
+
+    touched = []
+    with instances_lock:
+        for inst in instances.values():
+            if inst.get("model_path") != model_path or inst.get("status") == "stopped":
+                continue
+            config = inst.setdefault("config", {})
+            config["idle_timeout_min"] = preset.get("idle_timeout_min", 0)
+            config["max_concurrent"] = preset.get("max_concurrent", 0)
+            config["max_queue_depth"] = preset.get("max_queue_depth", 200)
+            config["share_queue"] = preset.get("share_queue", False)
+            touched.append(inst["id"])
+
+    for inst_id in touched:
+        refresh_gate(inst_id)
+
+    if touched:
+        save_state()
 
 
 @bp.route("/api/presets/<path:model_path>", methods=["PATCH"])
