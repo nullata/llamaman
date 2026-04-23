@@ -72,7 +72,7 @@ Before starting, edit `docker-compose.yml` and set the two host path variables t
 - HOST_LOGS_DIR=/absolute/host/path/to/logs
 ```
 
-These must be the real paths on the Docker host. LlamaMan passes them to the Docker daemon when spawning sibling llama-server containers, so they must resolve on the host — not inside the llamaman container.
+These must be the real paths on the Docker host. LlamaMan passes them to the Docker daemon when spawning sibling llama-server containers, so they must resolve on the host - not inside the llamaman container.
 
 **NVIDIA:**
 ```bash
@@ -384,7 +384,7 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 | `MODELS_DIR` | `/models` | Directory scanned for model files (container path) |
 | `DATA_DIR` | `/data` | Directory for persistent config/state (JSON files) |
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs (container path) |
-| `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume — must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
+| `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume - must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
 | `HOST_LOGS_DIR` | _(same as `LOGS_DIR`)_ | **Host-side** absolute path of the logs volume. Same requirement as `HOST_MODELS_DIR`. |
 | `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool |
 | `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool |
