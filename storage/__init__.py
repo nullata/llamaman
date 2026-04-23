@@ -2,7 +2,7 @@
 
 import os
 
-from config import STATE_FILE, PRESETS_FILE, USERS_FILE, SETTINGS_FILE
+from config import STATE_FILE, PRESETS_FILE, USERS_FILE, SETTINGS_FILE, RECORDINGS_DIR
 
 _backend = None
 
@@ -22,6 +22,9 @@ def get_storage():
         _backend = MariaDBBackend(database_url)
     else:
         from storage.json_backend import JsonBackend
-        _backend = JsonBackend(STATE_FILE, PRESETS_FILE, USERS_FILE, SETTINGS_FILE)
+        _backend = JsonBackend(
+            STATE_FILE, PRESETS_FILE, USERS_FILE, SETTINGS_FILE,
+            recordings_dir=RECORDINGS_DIR,
+        )
 
     return _backend

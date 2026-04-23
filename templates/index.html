@@ -307,6 +307,20 @@
                 </label>
               </div>
               <p class="hint-text">When off (default), the API cannot load models if admin-launched models fill the cap. When on, the API may evict admin-launched models using LRU.</p>
+              <div class="cleanup-section-divider" aria-hidden="true"></div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-recording-mode">Request recording</label>
+                <select id="s-recording-mode" class="download-settings-input">
+                  <option value="off">Off</option>
+                  <option value="per_request">Per request</option>
+                  <option value="per_conversation">Per conversation</option>
+                </select>
+                <p class="hint-text">Records inference traffic (Ollama and OpenAI APIs, plus the per-instance proxy) to the configured storage backend. Per-conversation groups turns by content hash.</p>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-recording-retention-days">Retention (days, 0 = keep forever)</label>
+                <input id="s-recording-retention-days" class="download-settings-input" type="number" value="30" min="0" step="1" />
+              </div>
             </div>
             <div class="form-actions">
               <button class="btn btn-secondary" type="button" id="btn-download-models-json"><i

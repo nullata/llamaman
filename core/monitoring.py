@@ -26,6 +26,9 @@ _DEFAULT_FAILED_DOWNLOAD_RETRY_COUNT = 3
 _last_image_check_at: float = 0.0
 _IMAGE_CHECK_INTERVAL = 3600  # check hourly whether auto-update is due
 
+_last_request_log_prune_at: float = 0.0
+_REQUEST_LOG_PRUNE_INTERVAL = 3600  # prune request_log once per hour
+
 
 def _run_cleanup() -> None:
     from storage import get_storage
@@ -206,8 +209,25 @@ def _handle_download_exit(dl_id: str, exit_code: int) -> None:
         save_state()
 
 
+def _prune_request_log():
+    from storage import get_storage
+    storage = get_storage()
+    days = storage.get_settings().get("recording_retention_days", 30)
+    try:
+        days = int(days)
+    except (TypeError, ValueError):
+        days = 30
+    if days <= 0:
+        return  # 0 = keep forever
+    cutoff_ms = int((time.time() - days * 86400) * 1000)
+    pruned = storage.prune_request_log(cutoff_ms)
+    if pruned:
+        logger.info("request_log: pruned %d records older than %d days", pruned, days)
+
+
 def _background_poller():
     global _last_cleanup_at, _last_orphan_scan_at, _last_stale_cleanup_at, _last_image_check_at
+    global _last_request_log_prune_at
     while True:
         time.sleep(5)
 
@@ -238,6 +258,14 @@ def _background_poller():
                 _run_stale_record_cleanup()
             except Exception as e:
                 logger.warning("Stale record cleanup error: %s", e)
+
+        # --- Request log retention ---
+        if now - _last_request_log_prune_at >= _REQUEST_LOG_PRUNE_INTERVAL:
+            _last_request_log_prune_at = now
+            try:
+                _prune_request_log()
+            except Exception as e:
+                logger.warning("request_log prune error: %s", e)
 
         # --- Docker image auto-update ---
         if now - _last_image_check_at >= _IMAGE_CHECK_INTERVAL:

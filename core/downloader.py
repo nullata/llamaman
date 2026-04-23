@@ -14,25 +14,28 @@ token = os.environ.get("HF_TOKEN", "").strip() or None
 speed_limit = int(os.environ.get("HF_SPEED_LIMIT", "0"))        # effective at launch (for log)
 per_model_limit = int(os.environ.get("HF_PER_MODEL_SPEED_LIMIT", "0"))  # per-model fallback
 
-_SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "/data"), "settings.json")
+_SUBPROCESS_SETTINGS_FILE = os.path.join(
+    os.environ.get("DATA_DIR", "/data"), "subprocess_settings.json"
+)
 
 CHUNK_SIZE = 64 * 1024  # 64 KB
 HF_API = "https://huggingface.co"
 
 
 def _read_global_speed_limit() -> int:
-    """Read the current global speed limit directly from settings.json (bytes/sec).
-
-    Reading settings.json directly means any save from the UI is picked up
-    within 1 second by running downloads, with no separate control file needed.
+    """Read the current global speed limit from the subprocess-facing settings
+    snapshot (bytes/sec). Maintained by the main process regardless of storage
+    backend, so live UI updates are picked up within 1 second by running
+    downloads on both JSON and MariaDB backends.
 
     Returns:
         > 0  - global limit active
           0  - global limit explicitly disabled
-         -1  - settings.json missing or unreadable (non-JSON backend or first run)
+         -1  - snapshot missing or unreadable (first run before any save,
+               or the main process hasn't written it yet)
     """
     try:
-        with open(_SETTINGS_FILE) as f:
+        with open(_SUBPROCESS_SETTINGS_FILE) as f:
             s = json.load(f)
         mbps = float(s.get("global_speed_limit_mbps", 0) or 0)
         return int(mbps * 1_000_000 / 8) if mbps > 0 else 0

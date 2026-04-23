@@ -350,7 +350,24 @@ def relaunch_inactive_instance(inst_id: str) -> bool:
         if inst:
             inst["config"] = config
 
-    refresh_gate(inst_id)
+    # Reconcile the gate with the merged config. refresh_gate alone is a no-op
+    # when no gate exists (stopped instances drop theirs via remove_gate, and
+    # instances originally launched with max_concurrent=0 never had one). Cover
+    # all four transitions: create/refresh/remove/none.
+    merged_mc = int(config.get("max_concurrent", 0) or 0)
+    if merged_mc > 0:
+        if get_gate(inst_id) is None:
+            create_gate(
+                inst_id,
+                merged_mc,
+                int(config.get("max_queue_depth", 200) or 200),
+                model_path=model_path,
+                share_queue=bool(config.get("share_queue", False)),
+            )
+        else:
+            refresh_gate(inst_id)
+    else:
+        remove_gate(inst_id)
 
     log_file = os.path.join(LOGS_DIR, f"{inst_id}.log")
 

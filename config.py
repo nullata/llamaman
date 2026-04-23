@@ -25,6 +25,7 @@ REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", 300))
 STATE_FILE = os.path.join(DATA_DIR, "state.json")
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
+RECORDINGS_DIR = os.environ.get("RECORDINGS_DIR", os.path.join(DATA_DIR, "request_log"))
 SECRET_KEY = os.environ.get("SECRET_KEY", "")
 
 # Docker-in-Docker settings

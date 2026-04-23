@@ -98,3 +98,42 @@ class StorageBackend(ABC):
     def verify_api_key(self, raw_key: str) -> bool:
         """Check if a raw bearer token matches any stored key hash."""
         ...
+
+    # -- Request Log --
+
+    @abstractmethod
+    def append_request_log(self, record: dict, mode: str) -> None:
+        """Persist one inference turn.
+
+        `record` must contain at minimum `conversation_id` (32-char hex) and
+        `created_at` (epoch milliseconds). Other envelope fields (inst_id,
+        model, endpoint, path, duration_ms, prompt_tokens, completion_tokens,
+        status_code, streamed, request_body, response_body) are optional.
+
+        `mode` is the active recording mode: 'per_request' or 'per_conversation'.
+        Backends may use it to shape storage layout; callers pass the setting
+        value through so backends remain the sole source of layout knowledge.
+        Must never be called with mode 'off'.
+        """
+        ...
+
+    @abstractmethod
+    def list_conversations(self, limit: int = 100) -> list[dict]:
+        """Return the most recent conversations with rolled-up metadata.
+
+        Each dict contains: conversation_id, model, first_seen_at (epoch ms),
+        last_seen_at (epoch ms), turn_count, title (truncated first user msg).
+        Ordered by last_seen_at descending.
+        """
+        ...
+
+    @abstractmethod
+    def get_conversation_turns(self, conversation_id: str) -> list[dict]:
+        """Return all recorded turns for a conversation, ordered by created_at.
+        Each dict is the full envelope + bodies. Empty list if not found."""
+        ...
+
+    @abstractmethod
+    def prune_request_log(self, older_than_ms: int) -> int:
+        """Delete records with created_at < older_than_ms. Returns count pruned."""
+        ...

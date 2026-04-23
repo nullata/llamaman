@@ -23,6 +23,7 @@ import api.settings as settings
 import api.api_keys as api_keys
 import api.images as images
 import api.restore as restore
+import api.request_log as request_log
 
 
 def create_app() -> Flask:
@@ -52,6 +53,7 @@ def create_app() -> Flask:
     application.register_blueprint(api_keys.bp)
     application.register_blueprint(images.bp)
     application.register_blueprint(restore.bp)
+    application.register_blueprint(request_log.bp)
 
     auth.init_auth(application)
 
@@ -80,6 +82,14 @@ start_background_poller()
 
 # Create the Flask app
 app = create_app()
+
+# Keep the subprocess-facing settings mirror in sync from boot onward so any
+# download subprocess spawned right after startup sees the current values.
+from api.settings import snapshot_subprocess_settings as _snapshot_subprocess_settings
+try:
+    _snapshot_subprocess_settings()
+except Exception as _e:
+    logger.warning("subprocess_settings snapshot at boot failed: %s", _e)
 
 # Restore idle proxies from previous state
 for _inst_id, _proxy_port, _internal_port in _deferred_proxies:

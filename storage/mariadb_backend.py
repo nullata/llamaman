@@ -5,7 +5,11 @@ import json
 import logging
 from copy import deepcopy
 
-from sqlalchemy import create_engine, Column, String, Integer, Float, Boolean, Text, func
+from sqlalchemy import (
+    create_engine, Column, String, Integer, Float, Boolean, Text, func,
+    BigInteger, SmallInteger,
+)
+from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 from storage.base import StorageBackend
@@ -66,6 +70,24 @@ class ApiKeyRow(Base):
     key_hash = Column(String(64), nullable=False)
     prefix = Column(String(16), default="")
     created_at = Column(Integer, default=0)
+
+
+class RequestLogRow(Base):
+    __tablename__ = "request_log"
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id = Column(String(32), index=True)
+    inst_id = Column(String(64), index=True, nullable=True)
+    model = Column(String(255), index=True, default="")
+    endpoint = Column(String(32), default="")
+    path = Column(String(128), default="")
+    created_at = Column(BigInteger, index=True)
+    duration_ms = Column(Integer, nullable=True)
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    status_code = Column(SmallInteger, nullable=True)
+    streamed = Column(Boolean, default=False)
+    request_body = Column(MEDIUMTEXT, default="")
+    response_body = Column(MEDIUMTEXT, nullable=True)
 
 
 # ---------------------------------------------------------------------------
@@ -298,5 +320,138 @@ class MariaDBBackend(StorageBackend):
         session = self._session()
         try:
             return session.query(ApiKeyRow).filter_by(key_hash=hashed).first() is not None
+        finally:
+            self._session_factory.remove()
+
+    # -- Request Log --
+
+    def append_request_log(self, record: dict, mode: str) -> None:
+        # mode is ignored: the DB layout is a single table regardless of grouping;
+        # the reader does per-conversation rollups via GROUP BY.
+        session = self._session()
+        try:
+            row = RequestLogRow(
+                conversation_id=record.get("conversation_id"),
+                inst_id=record.get("inst_id"),
+                model=record.get("model", "") or "",
+                endpoint=record.get("endpoint", "") or "",
+                path=record.get("path", "") or "",
+                created_at=record.get("created_at"),
+                duration_ms=record.get("duration_ms"),
+                prompt_tokens=record.get("prompt_tokens"),
+                completion_tokens=record.get("completion_tokens"),
+                status_code=record.get("status_code"),
+                streamed=bool(record.get("streamed", False)),
+                request_body=record.get("request_body") or "",
+                response_body=record.get("response_body"),
+            )
+            session.add(row)
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.warning("request_log append failed: %s", e)
+        finally:
+            self._session_factory.remove()
+
+    @staticmethod
+    def _extract_title(request_body: str) -> str:
+        try:
+            req = json.loads(request_body or "{}")
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return ""
+        if not isinstance(req, dict):
+            return ""
+        msgs = req.get("messages") or []
+        if isinstance(msgs, list):
+            for m in msgs:
+                if isinstance(m, dict) and m.get("role") == "user":
+                    c = m.get("content", "")
+                    if isinstance(c, str) and c:
+                        return c[:120]
+        prompt = req.get("prompt")
+        if isinstance(prompt, str):
+            return prompt[:120]
+        return ""
+
+    def list_conversations(self, limit: int = 100) -> list[dict]:
+        session = self._session()
+        try:
+            rows = (
+                session.query(
+                    RequestLogRow.conversation_id,
+                    func.min(RequestLogRow.created_at).label("first_seen_at"),
+                    func.max(RequestLogRow.created_at).label("last_seen_at"),
+                    func.count(RequestLogRow.id).label("turn_count"),
+                    func.min(RequestLogRow.model).label("model"),
+                )
+                .group_by(RequestLogRow.conversation_id)
+                .order_by(func.max(RequestLogRow.created_at).desc())
+                .limit(limit)
+                .all()
+            )
+            out = []
+            for cid, first, last, count, model in rows:
+                # Title: pull the earliest row's request_body for this conversation
+                first_row = (
+                    session.query(RequestLogRow.request_body)
+                    .filter(RequestLogRow.conversation_id == cid)
+                    .order_by(RequestLogRow.created_at.asc())
+                    .limit(1)
+                    .scalar()
+                )
+                out.append({
+                    "conversation_id": cid,
+                    "model": model or "",
+                    "first_seen_at": int(first) if first else 0,
+                    "last_seen_at": int(last) if last else 0,
+                    "turn_count": int(count),
+                    "title": self._extract_title(first_row or ""),
+                })
+            return out
+        finally:
+            self._session_factory.remove()
+
+    def get_conversation_turns(self, conversation_id: str) -> list[dict]:
+        session = self._session()
+        try:
+            rows = (
+                session.query(RequestLogRow)
+                .filter(RequestLogRow.conversation_id == conversation_id)
+                .order_by(RequestLogRow.created_at.asc())
+                .all()
+            )
+            return [{
+                "id": r.id,
+                "conversation_id": r.conversation_id,
+                "inst_id": r.inst_id,
+                "model": r.model,
+                "endpoint": r.endpoint,
+                "path": r.path,
+                "created_at": r.created_at,
+                "duration_ms": r.duration_ms,
+                "prompt_tokens": r.prompt_tokens,
+                "completion_tokens": r.completion_tokens,
+                "status_code": r.status_code,
+                "streamed": bool(r.streamed),
+                "request_body": r.request_body,
+                "response_body": r.response_body,
+            } for r in rows]
+        finally:
+            self._session_factory.remove()
+
+    def prune_request_log(self, older_than_ms: int) -> int:
+        session = self._session()
+        try:
+            count = (
+                session.query(RequestLogRow)
+                .filter(RequestLogRow.created_at < older_than_ms)
+                .delete(synchronize_session=False)
+            )
+            session.commit()
+            return int(count or 0)
+        except Exception as e:
+            session.rollback()
+            logger.warning("request_log prune failed: %s", e)
+            return 0
         finally:
             self._session_factory.remove()
