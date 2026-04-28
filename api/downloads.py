@@ -12,6 +12,7 @@ from flask import Blueprint, Response, jsonify, request
 
 from api.settings import get_hf_token_secret
 from config import DATA_DIR, LOGS_DIR, MODELS_DIR, logger
+from core.downloader import list_repo_files, resolve_filename
 from core.helpers import cleanup_download_dir, kill_instance_process, public_dict, read_log_file, stream_log_file
 from core.model_sources import record_model_source
 from core.state import downloads, downloads_lock, save_state
@@ -135,6 +136,18 @@ def api_downloads_create():
         if not token:
             return jsonify({"error": "Saved Hugging Face token not found"}), 400
     per_model_mbps = float(body.get("speed_limit_mbps", 0) or 0)
+
+    if filename:
+        try:
+            repo_files = list_repo_files(repo_id, token or None)
+        except Exception as e:
+            return jsonify({"error": f"Could not list files in {repo_id}: {e}"}), 502
+        try:
+            targets = resolve_filename(filename, repo_files, rid=repo_id)
+        except RuntimeError as e:
+            return jsonify({"error": str(e)}), 400
+        # Canonical name: shard 1 for multipart, full repo path for nested basenames.
+        filename = targets[0]["name"]
 
     dest_name = repo_id.split("/")[-1]
     if filename:
