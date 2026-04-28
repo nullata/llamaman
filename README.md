@@ -352,8 +352,11 @@ Zero-config. Stores data in JSON files under `DATA_DIR` (`/data`):
 - `users.json` - user accounts
 - `settings.json` - global settings
 - `api_keys.json` - API key hashes
+- `request_log/` - per-conversation request log records (override location with `RECORDINGS_DIR`)
 
 Instance and download logs are written to `LOGS_DIR` (`/tmp/llama-logs`), which is separate from persistent data.
+
+When running with the MariaDB backend (`DATABASE_URL` set), request logs are stored in the `request_log` table instead and `RECORDINGS_DIR` has no effect.
 
 ### MariaDB / MySQL
 
@@ -383,6 +386,7 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 |---|---|---|
 | `MODELS_DIR` | `/models` | Directory scanned for model files (container path) |
 | `DATA_DIR` | `/data` | Directory for persistent config/state (JSON files) |
+| `RECORDINGS_DIR` | `{DATA_DIR}/request_log` | Directory for per-conversation request log records. JSON backend only - ignored when `DATABASE_URL` is set. |
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs (container path) |
 | `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume - must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
 | `HOST_LOGS_DIR` | _(same as `LOGS_DIR`)_ | **Host-side** absolute path of the logs volume. Same requirement as `HOST_MODELS_DIR`. |

@@ -315,7 +315,7 @@ class JsonBackend(StorageBackend):
                 continue
             if date >= cutoff_date:
                 continue
-            # Whole day is older than cutoff — nuke it
+            # Whole day is older than cutoff - nuke it
             try:
                 for fn in os.listdir(date_dir):
                     full = os.path.join(date_dir, fn)
