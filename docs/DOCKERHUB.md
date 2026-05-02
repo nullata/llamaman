@@ -12,7 +12,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Model backup and restore** - export model metadata and presets to JSON, restore on any instance with downloads queued automatically for missing models
 - **Instance management** - stop, restart, remove, view live-streamed logs
-- **Container resource monitoring** - live CPU%, core quota, RAM usage, and GPU assignment per running instance card
+- **Container resource monitoring** - live CPU%, core quota, RAM usage with thin progress bars, and GPU assignment per running instance card
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
@@ -27,7 +27,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 
 - **Universal GPU support** - single image for NVIDIA, AMD (ROCm), Intel Arc, and CPU. GPU vendor auto-detected at startup; `LLAMA_IMAGE` auto-selected from the detected vendor. `GPU_TYPE` overrides if needed.
 - **Native GPU monitoring** - VRAM and utilization queried inside the llamaman container (pynvml for NVIDIA, `/sys/class/drm` sysfs for AMD/Intel Arc). GPU panel works without a running llama-server instance.
-- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment.
+- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment with thin usage bars under each value.
 - **Docker image management** - pull any llama.cpp image by name, delete old local images from the Settings UI.
 - **Model backup and restore** - export model metadata and presets to JSON; restore on any instance with downloads queued automatically for missing models.
 - **Repeat penalty in proxy sampling overrides** - configurable per preset, default 0 (disabled).

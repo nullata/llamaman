@@ -15,7 +15,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Model backup and restore** - export all model metadata and presets to JSON, restore on any instance by re-queuing missing downloads automatically
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
-- **Container resource monitoring** - live CPU%, core quota, RAM usage, and GPU assignment per running instance card
+- **Container resource monitoring** - live CPU%, core quota, RAM usage with thin progress bars, and GPU assignment per running instance card
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -29,7 +29,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 
 - **Universal GPU support** - single `Dockerfile` and image for NVIDIA, AMD (ROCm), Intel Arc, and CPU. GPU vendor is auto-detected at startup; `GPU_TYPE` overrides if needed. `LLAMA_IMAGE` is also auto-selected from the detected vendor.
 - **Native GPU monitoring** - VRAM and utilization are queried inside the llamaman container directly (pynvml for NVIDIA, `/sys/class/drm` sysfs for AMD/Intel Arc), so the GPU panel works without a running llama-server instance.
-- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment, updated every 3 seconds via a separate poll.
+- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment with thin usage bars under each value, updated every 3 seconds via a separate poll.
 - **Docker image management** - pull any llama.cpp image by name, delete old local images, all from the Settings UI.
 - **Model backup and restore** - export all model metadata and presets to JSON; restore on any instance with downloads queued automatically for missing models.
 - **Repeat penalty in proxy sampling overrides** - configurable per preset, default 0 (disabled).
