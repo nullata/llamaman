@@ -2,37 +2,43 @@
 
 import json
 import os
+import re
 import sys
 import time
 
 import requests
 
-repo_id = os.environ["HF_REPO_ID"]
-local_dir = os.environ["HF_LOCAL_DIR"]
+MULTIPART_RE = re.compile(r"^(.*)-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
+
+repo_id = os.environ.get("HF_REPO_ID", "")
+local_dir = os.environ.get("HF_LOCAL_DIR", "")
 filename = os.environ.get("HF_FILENAME", "").strip()
 token = os.environ.get("HF_TOKEN", "").strip() or None
 speed_limit = int(os.environ.get("HF_SPEED_LIMIT", "0"))        # effective at launch (for log)
 per_model_limit = int(os.environ.get("HF_PER_MODEL_SPEED_LIMIT", "0"))  # per-model fallback
 
-_SETTINGS_FILE = os.path.join(os.environ.get("DATA_DIR", "/data"), "settings.json")
+_SUBPROCESS_SETTINGS_FILE = os.path.join(
+    os.environ.get("DATA_DIR", "/data"), "subprocess_settings.json"
+)
 
 CHUNK_SIZE = 64 * 1024  # 64 KB
 HF_API = "https://huggingface.co"
 
 
 def _read_global_speed_limit() -> int:
-    """Read the current global speed limit directly from settings.json (bytes/sec).
-
-    Reading settings.json directly means any save from the UI is picked up
-    within 1 second by running downloads, with no separate control file needed.
+    """Read the current global speed limit from the subprocess-facing settings
+    snapshot (bytes/sec). Maintained by the main process regardless of storage
+    backend, so live UI updates are picked up within 1 second by running
+    downloads on both JSON and MariaDB backends.
 
     Returns:
         > 0  - global limit active
           0  - global limit explicitly disabled
-         -1  - settings.json missing or unreadable (non-JSON backend or first run)
+         -1  - snapshot missing or unreadable (first run before any save,
+               or the main process hasn't written it yet)
     """
     try:
-        with open(_SETTINGS_FILE) as f:
+        with open(_SUBPROCESS_SETTINGS_FILE) as f:
             s = json.load(f)
         mbps = float(s.get("global_speed_limit_mbps", 0) or 0)
         return int(mbps * 1_000_000 / 8) if mbps > 0 else 0
@@ -58,10 +64,10 @@ def _effective_limit() -> int:
     return speed_limit  # settings.json unreadable >> launch-time fallback
 
 
-def _headers():
+def _headers(tok=None):
     h = {"User-Agent": "llamaman/1.0"}
-    if token:
-        h["Authorization"] = f"Bearer {token}"
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
     return h
 
 
@@ -115,14 +121,20 @@ def _throttled_iter(resp):
         yield chunk
 
 
-def list_repo_files():
-    """Fetch file list from HuggingFace API."""
-    url = f"{HF_API}/api/models/{repo_id}"
-    r = requests.get(url, headers=_headers(), timeout=30)
+def list_repo_files(rid=None, tok=None):
+    """Fetch file list from HuggingFace API.
+
+    Defaults to module-level repo_id/token (script use); pass args when
+    imported from another module.
+    """
+    rid = rid or repo_id
+    tok = tok if tok is not None else token
+    url = f"{HF_API}/api/models/{rid}"
+    r = requests.get(url, headers=_headers(tok), timeout=30)
     if r.status_code in (401, 403):
         raise RuntimeError(f"Authentication failed ({r.status_code}). Check your HF token.")
     if r.status_code == 404:
-        raise RuntimeError(f"Repository not found: {repo_id}")
+        raise RuntimeError(f"Repository not found: {rid}")
     r.raise_for_status()
     siblings = r.json().get("siblings", [])
     return [{"name": s["rfilename"], "size": s.get("size") or s.get("lfs", {}).get("size")} for s in siblings]
@@ -141,7 +153,7 @@ def download_file(fname, file_num=None, total_files=None):
     if os.path.isfile(local_path):
         existing = os.path.getsize(local_path)
 
-    hdrs = _headers()
+    hdrs = _headers(token)
     if existing > 0:
         hdrs["Range"] = f"bytes={existing}-"
 
@@ -188,30 +200,87 @@ def download_file(fname, file_num=None, total_files=None):
     print(f"  {_fmt_size(downloaded)}{f' / {_fmt_size(total)}' if total else ''}  100%  {_fmt_size(speed)}/s  done", flush=True)
 
 
-print(f"Starting download: {repo_id}", flush=True)
-if filename:
-    print(f"Single file: {filename}", flush=True)
-print(f"Destination: {local_dir}", flush=True)
-if speed_limit:
-    print(f"Speed limit: {speed_limit * 8 / 1_000_000:.0f} Mbps ({speed_limit / 1024 / 1024:.1f} MB/s)", flush=True)
-print("", flush=True)
+def resolve_filename(requested: str, repo_files: list[dict], rid: str = "") -> list[dict]:
+    """Resolve a user-supplied filename to one or more repo-relative paths.
 
-try:
+    Handles two UI gotchas: HF's file browser shows only basenames even when
+    the file is nested in a subfolder, and multipart GGUFs ("...-00001-of-00008.gguf")
+    are useless without their siblings. Matches by exact path first, then by
+    basename; if the resolved name is a multipart shard, expands to every shard
+    in that group so the user only has to pick one.
+    """
+    rid = rid or repo_id
+    requested_norm = requested.strip().lstrip("/")
+    by_path = {f["name"]: f for f in repo_files}
+
+    match = by_path.get(requested_norm)
+    if match is None:
+        basename = os.path.basename(requested_norm)
+        basename_matches = [f for f in repo_files if os.path.basename(f["name"]) == basename]
+        if len(basename_matches) == 1:
+            match = basename_matches[0]
+        elif len(basename_matches) > 1:
+            paths = ", ".join(f["name"] for f in basename_matches)
+            raise RuntimeError(f"Ambiguous filename '{basename}' matches multiple paths: {paths}")
+        else:
+            raise RuntimeError(f"File '{requested}' not found in {rid}")
+
+    m = MULTIPART_RE.match(match["name"])
+    if not m:
+        return [match]
+
+    stem, _, total_str = m.group(1), m.group(2), m.group(3)
+    total = int(total_str)
+    shards = []
+    for i in range(1, total + 1):
+        shard_name = f"{stem}-{i:05d}-of-{total_str}.gguf"
+        shard = by_path.get(shard_name)
+        if shard is None:
+            raise RuntimeError(f"Missing multipart shard in repo: {shard_name}")
+        shards.append(shard)
+    return shards
+
+
+def main():
+    print(f"Starting download: {repo_id}", flush=True)
     if filename:
-        download_file(filename)
-    else:
-        print("Fetching file list...", flush=True)
-        files = list_repo_files()
-        if not files:
-            raise RuntimeError(f"No files found in {repo_id}")
-        print(f"Found {len(files)} files", flush=True)
-        print("", flush=True)
-        for i, finfo in enumerate(files, 1):
-            download_file(finfo["name"], file_num=i, total_files=len(files))
+        print(f"Single file: {filename}", flush=True)
+    print(f"Destination: {local_dir}", flush=True)
+    if speed_limit:
+        print(f"Speed limit: {speed_limit * 8 / 1_000_000:.0f} Mbps ({speed_limit / 1024 / 1024:.1f} MB/s)", flush=True)
+    print("", flush=True)
 
-    print(f"\nCompleted: {local_dir}", flush=True)
-    sys.exit(0)
+    try:
+        if filename:
+            print("Fetching file list...", flush=True)
+            all_files = list_repo_files()
+            if not all_files:
+                raise RuntimeError(f"No files found in {repo_id}")
+            targets = resolve_filename(filename, all_files)
+            if len(targets) == 1 and targets[0]["name"] == filename.strip().lstrip("/"):
+                download_file(targets[0]["name"])
+            else:
+                print(f"Resolved to {len(targets)} file(s)", flush=True)
+                print("", flush=True)
+                for i, finfo in enumerate(targets, 1):
+                    download_file(finfo["name"], file_num=i, total_files=len(targets))
+        else:
+            print("Fetching file list...", flush=True)
+            files = list_repo_files()
+            if not files:
+                raise RuntimeError(f"No files found in {repo_id}")
+            print(f"Found {len(files)} files", flush=True)
+            print("", flush=True)
+            for i, finfo in enumerate(files, 1):
+                download_file(finfo["name"], file_num=i, total_files=len(files))
 
-except Exception as e:
-    print(f"\nError: {e}", flush=True)
-    sys.exit(1)
+        print(f"\nCompleted: {local_dir}", flush=True)
+        sys.exit(0)
+
+    except Exception as e:
+        print(f"\nError: {e}", flush=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

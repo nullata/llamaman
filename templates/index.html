@@ -130,11 +130,17 @@
                   <input id="f-note" type="text" placeholder="Add a note about this model…" />
                 </div>
                 <div class="form-group">
-                  <label for="f-port">Port</label>
+                  <span class="label-row">
+                    <label for="f-port">Port</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Port help" data-tip="Host port the llama-server listens on. Must fall within the configured port range (PORT_RANGE_START–PORT_RANGE_END)."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-port" type="number" value="8000" min="1024" max="65535" required />
                 </div>
                 <div class="form-group">
-                  <label for="f-gpu-layers">GPU Layers (-1 = all, 0 = CPU only)</label>
+                  <span class="label-row">
+                    <label for="f-gpu-layers">GPU Layers (-1 = all, 0 = CPU only)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="GPU Layers help" data-tip="Number of model layers offloaded to GPU. -1 offloads all layers, 0 runs entirely on CPU. Maps to llama-server --n-gpu-layers."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <div class="inline-field">
                     <input id="f-gpu-layers" type="number" value="-1" min="-1" />
                     <span id="gpu-layers-total" class="text-meta"></span>
@@ -142,39 +148,66 @@
                   <div id="gpu-layers-suggestion" class="text-meta gpu-layers-suggestion"></div>
                 </div>
                 <div class="form-group">
-                  <label for="f-ctx-size">Context Size</label>
+                  <span class="label-row">
+                    <label for="f-ctx-size">Context Size</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Context Size help" data-tip="Maximum prompt + response tokens the model holds in context for one request. Larger = more VRAM/RAM."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-ctx-size" type="number" min="1" required />
                 </div>
                 <div class="form-group">
-                  <label for="f-threads">CPU Threads (optional)</label>
+                  <span class="label-row">
+                    <label for="f-threads">CPU Threads (optional)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="CPU Threads help" data-tip="Number of CPU threads llama-server uses. Leave blank to let llama-server auto-detect based on the host."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-threads" type="number" placeholder="(auto)" min="1" />
                 </div>
                 <div class="form-group">
-                  <label for="f-memory-limit">System Memory Limit (optional)</label>
+                  <span class="label-row">
+                    <label for="f-memory-limit">System Memory Limit (optional)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="System Memory Limit help" data-tip="Hard cap on container RAM (e.g. 32g, 8192m). Blank = no limit. Exceeding this triggers an OOM kill of the instance."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-memory-limit" type="text" placeholder="(auto)  e.g. 32g  8192m" />
                 </div>
                 <div class="form-group">
-                  <label for="f-parallel">Parallel Slots (optional)</label>
+                  <span class="label-row">
+                    <label for="f-parallel">Parallel Slots (optional)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Parallel Slots help" data-tip="Number of concurrent decoding slots llama-server allocates (-np). Each slot can serve one request at a time."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-parallel" type="number" placeholder="(default 1)" min="1" />
                 </div>
                 <div class="form-group">
-                  <label for="f-gpu-devices">GPU Devices (optional)</label>
+                  <span class="label-row">
+                    <label for="f-gpu-devices">GPU Devices (optional)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="GPU Devices help" data-tip="Comma-separated GPU indices to expose (e.g. 0 or 0,1). Blank = all GPUs visible to the daemon."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-gpu-devices" type="text" placeholder="(all)  e.g. 0  or 0,1" />
                 </div>
                 <div class="form-group">
-                  <label for="f-idle-timeout">Idle Timeout min (0 = off)</label>
+                  <span class="label-row">
+                    <label for="f-idle-timeout">Idle Timeout min (0 = off)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Idle Timeout help" data-tip="Stop the instance after this many minutes with no requests. 0 keeps it running indefinitely. Live-updated from preset on save - no relaunch needed."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-idle-timeout" type="number" value="0" min="0" placeholder="0" />
                 </div>
                 <div class="form-group">
-                  <label for="f-max-concurrent">Max Concurrent (0 = unlimited)</label>
+                  <span class="label-row">
+                    <label for="f-max-concurrent">Max Concurrent (0 = unlimited)</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Max Concurrent help" data-tip="Maximum in-flight inference requests. Excess requests queue up to Max Queue Depth. 0 = no gating."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-max-concurrent" type="number" value="0" min="0" placeholder="0" />
                 </div>
                 <div class="form-group">
-                  <label for="f-max-queue-depth">Max Queue Depth</label>
+                  <span class="label-row">
+                    <label for="f-max-queue-depth">Max Queue Depth</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Max Queue Depth help" data-tip="Maximum queued requests before the gate returns HTTP 429. Only relevant when Max Concurrent > 0."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-max-queue-depth" type="number" value="200" min="1" placeholder="200" />
                 </div>
                 <div class="form-group full">
-                  <label for="f-extra">Extra Args</label>
+                  <span class="label-row">
+                    <label for="f-extra">Extra Args</label>
+                    <span class="info-tip" tabindex="0" role="button" aria-label="Extra Args help" data-tip="Extra command-line flags appended to the llama-server invocation (e.g. --flash-attn --mlock)."><i class="fa-solid fa-circle-info"></i></span>
+                  </span>
                   <input id="f-extra" type="text" placeholder="--flash-attn --mlock" />
                 </div>
                 <div class="form-group full launch-toggle-table">
@@ -201,23 +234,38 @@
                   <p class="hint-text">When enabled, the instance public port stays behind a proxy that forces these sampling values on forwarded requests.</p>
                   <div class="launch-inline-settings-grid">
                     <div class="form-group">
-                      <label for="f-proxy-sampling-temperature">Temperature</label>
+                      <span class="label-row">
+                        <label for="f-proxy-sampling-temperature">Temperature</label>
+                        <span class="info-tip" tabindex="0" role="button" aria-label="Temperature help" data-tip="Sampling temperature applied at the proxy. Higher = more random. Typical range 0.6–1.0."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
                       <input id="f-proxy-sampling-temperature" class="launch-settings-input" type="number" value="0.8" min="0" max="2" step="0.01" />
                     </div>
                     <div class="form-group">
-                      <label for="f-proxy-sampling-top-k">Top K</label>
+                      <span class="label-row">
+                        <label for="f-proxy-sampling-top-k">Top K</label>
+                        <span class="info-tip" tabindex="0" role="button" aria-label="Top K help" data-tip="Limits sampling to the K most likely next tokens. 0 = disabled."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
                       <input id="f-proxy-sampling-top-k" class="launch-settings-input" type="number" value="40" min="0" step="1" />
                     </div>
                     <div class="form-group">
-                      <label for="f-proxy-sampling-top-p">Top P</label>
+                      <span class="label-row">
+                        <label for="f-proxy-sampling-top-p">Top P</label>
+                        <span class="info-tip" tabindex="0" role="button" aria-label="Top P help" data-tip="Nucleus sampling threshold (0–1). Sample from the smallest set of tokens whose cumulative probability ≥ this value."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
                       <input id="f-proxy-sampling-top-p" class="launch-settings-input" type="number" value="0.95" min="0.01" max="1" step="0.01" />
                     </div>
                     <div class="form-group">
-                      <label for="f-proxy-sampling-presence-penalty">Presence Penalty</label>
+                      <span class="label-row">
+                        <label for="f-proxy-sampling-presence-penalty">Presence Penalty</label>
+                        <span class="info-tip" tabindex="0" role="button" aria-label="Presence Penalty help" data-tip="Penalty applied to tokens that already appeared in the response. Discourages topic repetition."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
                       <input id="f-proxy-sampling-presence-penalty" class="launch-settings-input" type="number" value="0.0" min="-2" max="2" step="0.01" />
                     </div>
                     <div class="form-group">
-                      <label for="f-proxy-sampling-repeat-penalty">Repeat Penalty</label>
+                      <span class="label-row">
+                        <label for="f-proxy-sampling-repeat-penalty">Repeat Penalty</label>
+                        <span class="info-tip" tabindex="0" role="button" aria-label="Repeat Penalty help" data-tip="Penalty applied to repeated tokens to discourage tight loops."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
                       <input id="f-proxy-sampling-repeat-penalty" class="launch-settings-input" type="number" value="0.0" min="0" max="2" step="0.01" />
                     </div>
                   </div>
@@ -307,6 +355,20 @@
                 </label>
               </div>
               <p class="hint-text">When off (default), the API cannot load models if admin-launched models fill the cap. When on, the API may evict admin-launched models using LRU.</p>
+              <div class="cleanup-section-divider" aria-hidden="true"></div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-recording-mode">Request recording</label>
+                <select id="s-recording-mode" class="download-settings-input">
+                  <option value="off">Off</option>
+                  <option value="per_request">Per request</option>
+                  <option value="per_conversation">Per conversation</option>
+                </select>
+                <p class="hint-text">Records inference traffic (Ollama and OpenAI APIs, plus the per-instance proxy) to the configured storage backend. Per-conversation groups turns by content hash.</p>
+              </div>
+              <div class="form-group cleanup-input-row">
+                <label for="s-recording-retention-days">Retention (days, 0 = keep forever)</label>
+                <input id="s-recording-retention-days" class="download-settings-input" type="number" value="30" min="0" step="1" />
+              </div>
             </div>
             <div class="form-actions">
               <button class="btn btn-secondary" type="button" id="btn-download-models-json"><i

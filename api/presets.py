@@ -3,6 +3,7 @@
 from flask import Blueprint, jsonify, request
 
 from core.proxy_sampling import parse_proxy_sampling_config
+from core.state import instances, instances_lock, save_state
 from storage import get_storage
 
 bp = Blueprint("presets", __name__)
@@ -70,7 +71,54 @@ def api_preset_save(model_path):
         **proxy_sampling_config,
     }
     get_storage().save_preset(model_path, data)
+    _apply_live_preset_changes(model_path, data)
     return jsonify({"status": "saved"})
+
+
+_LIVE_PROXY_SAMPLING_FIELDS = (
+    "proxy_sampling_override_enabled",
+    "proxy_sampling_temperature",
+    "proxy_sampling_top_k",
+    "proxy_sampling_top_p",
+    "proxy_sampling_presence_penalty",
+    "proxy_sampling_repeat_penalty",
+)
+
+
+def _apply_live_preset_changes(model_path: str, preset: dict) -> None:
+    """Update fields that take effect on a running instance without relaunch:
+    the reaper re-reads idle_timeout_min each tick, refresh_gate picks up
+    queue changes, and the proxy + Ollama/OpenAI compat layers read the
+    proxy_sampling_* fields from inst["config"] per request. Everything else
+    (gpu layers, ctx size, threads, ...) is baked into the container at launch.
+
+    Caveat for proxy_sampling toggles: if the instance was launched with all
+    of idle_timeout=0, max_concurrent=0, and override_enabled=False, no
+    sidecar proxy was spawned, so direct hits to the public port bypass the
+    override even after a live toggle. Compat routes still apply it. A
+    relaunch is required to spawn the proxy in that case."""
+    from proxy import refresh_gate
+
+    touched = []
+    with instances_lock:
+        for inst in instances.values():
+            if inst.get("model_path") != model_path or inst.get("status") == "stopped":
+                continue
+            config = inst.setdefault("config", {})
+            config["idle_timeout_min"] = preset.get("idle_timeout_min", 0)
+            config["max_concurrent"] = preset.get("max_concurrent", 0)
+            config["max_queue_depth"] = preset.get("max_queue_depth", 200)
+            config["share_queue"] = preset.get("share_queue", False)
+            for f in _LIVE_PROXY_SAMPLING_FIELDS:
+                if f in preset:
+                    config[f] = preset[f]
+            touched.append(inst["id"])
+
+    for inst_id in touched:
+        refresh_gate(inst_id)
+
+    if touched:
+        save_state()
 
 
 @bp.route("/api/presets/<path:model_path>", methods=["PATCH"])

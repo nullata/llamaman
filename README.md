@@ -1,7 +1,7 @@
 # <img src="static/images/logo.svg" alt="logo" width="24"> LlamaMan
 
 <p align="center">
-  <img src="docs/llamaman-0.9.6.jpg" alt="LlamaMan" width="400">
+  <img src="docs/llamaman-1.0.0.jpg" alt="LlamaMan" width="400">
 </p>
 
 A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances. LlamaMan runs as a lightweight Python container and spawns llama-server as sibling Docker containers using the official llama.cpp images. Includes an Ollama-compatible API proxy so it works as a drop-in replacement for Ollama with [Open WebUI](https://github.com/open-webui/open-webui).
@@ -15,7 +15,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Model backup and restore** - export all model metadata and presets to JSON, restore on any instance by re-queuing missing downloads automatically
 - **Instance management** - stop, restart, remove, view live-streamed logs
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
-- **Container resource monitoring** - live CPU%, core quota, RAM usage, and GPU assignment per running instance card
+- **Container resource monitoring** - live CPU%, core quota, RAM usage with thin progress bars, and GPU assignment per running instance card
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
 - **Authentication** - user accounts with session login, API key management with bearer tokens
@@ -29,7 +29,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 
 - **Universal GPU support** - single `Dockerfile` and image for NVIDIA, AMD (ROCm), Intel Arc, and CPU. GPU vendor is auto-detected at startup; `GPU_TYPE` overrides if needed. `LLAMA_IMAGE` is also auto-selected from the detected vendor.
 - **Native GPU monitoring** - VRAM and utilization are queried inside the llamaman container directly (pynvml for NVIDIA, `/sys/class/drm` sysfs for AMD/Intel Arc), so the GPU panel works without a running llama-server instance.
-- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment, updated every 3 seconds via a separate poll.
+- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment with thin usage bars under each value, updated every 3 seconds via a separate poll.
 - **Docker image management** - pull any llama.cpp image by name, delete old local images, all from the Settings UI.
 - **Model backup and restore** - export all model metadata and presets to JSON; restore on any instance with downloads queued automatically for missing models.
 - **Repeat penalty in proxy sampling overrides** - configurable per preset, default 0 (disabled).
@@ -72,7 +72,7 @@ Before starting, edit `docker-compose.yml` and set the two host path variables t
 - HOST_LOGS_DIR=/absolute/host/path/to/logs
 ```
 
-These must be the real paths on the Docker host. LlamaMan passes them to the Docker daemon when spawning sibling llama-server containers, so they must resolve on the host — not inside the llamaman container.
+These must be the real paths on the Docker host. LlamaMan passes them to the Docker daemon when spawning sibling llama-server containers, so they must resolve on the host - not inside the llamaman container.
 
 **NVIDIA:**
 ```bash
@@ -197,6 +197,15 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Top P** | `0.95` | Top-p (nucleus) sampling value to enforce (range: `0.01`–`1.0`). Only active when proxy sampling overrides are enabled. |
 | **Presence Penalty** | `0.0` | Presence penalty to enforce (range: `-2.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
 | **Repeat Penalty** | `0.0` | Repeat penalty to enforce (range: `0.0`–`2.0`). `0` = disabled (not injected). Only active when proxy sampling overrides are enabled. |
+
+### Live preset updates
+
+Saving a preset (**Save Preset** in the Launch tab) updates already-running instances of that model in place where possible, so most parameter tweaks don't require a relaunch:
+
+- **Apply live (no relaunch needed):** `idle_timeout_min`, `max_concurrent`, `max_queue_depth`, `share_queue`, and all six proxy-sampling fields (`proxy_sampling_override_enabled`, `temperature`, `top_k`, `top_p`, `presence_penalty`, `repeat_penalty`). The reaper re-reads idle timeout each tick, the request gate is refreshed in place, and the proxy + compat routes read sampling fields from the instance config per request.
+- **Require relaunch:** everything baked into the llama-server container at launch - GPU layers, context size, threads, memory limit, parallel slots, GPU devices, embedding flag, extra args.
+
+**Caveat for proxy-sampling toggles:** if the instance was launched with `idle_timeout = 0`, `max_concurrent = 0`, **and** `override_enabled = false`, no sidecar proxy was spawned (see [Per-Instance Proxy](#per-instance-proxy)). Toggling `override_enabled = true` live still applies overrides on requests routed through the main app's Ollama/OpenAI compat endpoints, but direct hits to the public port go straight to llama-server and bypass the override. Relaunch the instance to spawn the proxy in that case.
 
 ### Concurrency and queueing
 
@@ -352,8 +361,11 @@ Zero-config. Stores data in JSON files under `DATA_DIR` (`/data`):
 - `users.json` - user accounts
 - `settings.json` - global settings
 - `api_keys.json` - API key hashes
+- `request_log/` - per-conversation request log records (override location with `RECORDINGS_DIR`)
 
 Instance and download logs are written to `LOGS_DIR` (`/tmp/llama-logs`), which is separate from persistent data.
+
+When running with the MariaDB backend (`DATABASE_URL` set), request logs are stored in the `request_log` table instead and `RECORDINGS_DIR` has no effect.
 
 ### MariaDB / MySQL
 
@@ -383,8 +395,9 @@ Tables are auto-created on first connection. Requires `sqlalchemy` and `pymysql`
 |---|---|---|
 | `MODELS_DIR` | `/models` | Directory scanned for model files (container path) |
 | `DATA_DIR` | `/data` | Directory for persistent config/state (JSON files) |
+| `RECORDINGS_DIR` | `{DATA_DIR}/request_log` | Directory for per-conversation request log records. JSON backend only - ignored when `DATABASE_URL` is set. |
 | `LOGS_DIR` | `/tmp/llama-logs` | Directory for instance and download logs (container path) |
-| `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume — must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
+| `HOST_MODELS_DIR` | _(same as `MODELS_DIR`)_ | **Host-side** absolute path of the models volume - must match the left side of `-v /host/path/models:/models`. Passed to the Docker daemon when spawning sibling llama-server containers so they can bind-mount the same directory. |
 | `HOST_LOGS_DIR` | _(same as `LOGS_DIR`)_ | **Host-side** absolute path of the logs volume. Same requirement as `HOST_MODELS_DIR`. |
 | `PORT_RANGE_START` | `8000` | Start of public llama-server/proxy port pool |
 | `PORT_RANGE_END` | `8020` | End of public llama-server/proxy port pool |

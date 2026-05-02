@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 from copy import deepcopy
+from datetime import datetime, timezone
 
 from storage.base import StorageBackend
 
@@ -46,7 +47,8 @@ class JsonBackend(StorageBackend):
     """Stores data in local JSON files. Zero dependencies, works out of the box."""
 
     def __init__(self, state_file: str, presets_file: str, users_file: str,
-                 settings_file: str, api_keys_file: str = ""):
+                 settings_file: str, api_keys_file: str = "",
+                 recordings_dir: str = ""):
         self._state_file = state_file
         self._presets_file = presets_file
         self._users_file = users_file
@@ -54,8 +56,12 @@ class JsonBackend(StorageBackend):
         self._api_keys_file = api_keys_file or os.path.join(
             os.path.dirname(settings_file), "api_keys.json"
         )
+        self._recordings_dir = recordings_dir or os.path.join(
+            os.path.dirname(settings_file), "request_log"
+        )
         self._state_lock = threading.Lock()
         self._settings_lock = threading.Lock()
+        self._request_log_lock = threading.Lock()
 
     # -- State helpers --
 
@@ -191,3 +197,139 @@ class JsonBackend(StorageBackend):
             if k.get("key_hash") == hashed:
                 return True
         return False
+
+    # -- Request Log --
+
+    def append_request_log(self, record: dict, mode: str) -> None:
+        conv_id = record.get("conversation_id")
+        created_at = record.get("created_at")
+        if not conv_id or not created_at:
+            logger.warning("request_log append skipped: missing conversation_id or created_at")
+            return
+
+        date = datetime.fromtimestamp(int(created_at) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        date_dir = os.path.join(self._recordings_dir, date)
+
+        if mode == "per_request":
+            # Unique filename per record; each turn is its own single-line file.
+            filename = f"{int(created_at)}_{conv_id[:8]}.jsonl"
+        else:
+            # per_conversation: append to the conversation's file.
+            filename = f"{conv_id}.jsonl"
+
+        path = os.path.join(date_dir, filename)
+        line = json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n"
+
+        with self._request_log_lock:
+            try:
+                os.makedirs(date_dir, exist_ok=True)
+                with open(path, "a", encoding="utf-8") as f:
+                    f.write(line)
+            except Exception as e:
+                logger.warning("request_log append failed (%s): %s", path, e)
+
+    def _iter_request_log_records(self):
+        """Yield every record dict across all date dirs, with (date_dir, filename, line_no)."""
+        if not os.path.isdir(self._recordings_dir):
+            return
+        for date in sorted(os.listdir(self._recordings_dir), reverse=True):
+            date_dir = os.path.join(self._recordings_dir, date)
+            if not os.path.isdir(date_dir):
+                continue
+            for fn in os.listdir(date_dir):
+                if not fn.endswith(".jsonl"):
+                    continue
+                full = os.path.join(date_dir, fn)
+                try:
+                    with open(full, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            try:
+                                yield json.loads(line), full
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+                except OSError:
+                    continue
+
+    def list_conversations(self, limit: int = 100) -> list[dict]:
+        rollup: dict[str, dict] = {}
+        for rec, _ in self._iter_request_log_records():
+            cid = rec.get("conversation_id")
+            if not cid:
+                continue
+            created = rec.get("created_at") or 0
+            entry = rollup.get(cid)
+            if entry is None:
+                entry = {
+                    "conversation_id": cid,
+                    "model": rec.get("model", ""),
+                    "first_seen_at": created,
+                    "last_seen_at": created,
+                    "turn_count": 0,
+                    "title": "",
+                }
+                rollup[cid] = entry
+            entry["turn_count"] += 1
+            if created < entry["first_seen_at"] or not entry["first_seen_at"]:
+                entry["first_seen_at"] = created
+            if created > entry["last_seen_at"]:
+                entry["last_seen_at"] = created
+            # Title = first user message from the first (earliest) request body
+            if not entry["title"]:
+                try:
+                    req = json.loads(rec.get("request_body") or "{}")
+                    msgs = req.get("messages") or []
+                    for m in msgs:
+                        if isinstance(m, dict) and m.get("role") == "user":
+                            content = m.get("content", "")
+                            if isinstance(content, str) and content:
+                                entry["title"] = content[:120]
+                                break
+                    if not entry["title"]:
+                        prompt = req.get("prompt")
+                        if isinstance(prompt, str):
+                            entry["title"] = prompt[:120]
+                except (json.JSONDecodeError, ValueError, TypeError):
+                    pass
+        out = sorted(rollup.values(), key=lambda e: e["last_seen_at"], reverse=True)
+        return out[:limit]
+
+    def get_conversation_turns(self, conversation_id: str) -> list[dict]:
+        turns = []
+        for rec, _ in self._iter_request_log_records():
+            if rec.get("conversation_id") == conversation_id:
+                turns.append(rec)
+        turns.sort(key=lambda r: r.get("created_at") or 0)
+        return turns
+
+    def prune_request_log(self, older_than_ms: int) -> int:
+        if not os.path.isdir(self._recordings_dir):
+            return 0
+        pruned = 0
+        cutoff_date = datetime.fromtimestamp(older_than_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        for date in os.listdir(self._recordings_dir):
+            date_dir = os.path.join(self._recordings_dir, date)
+            if not os.path.isdir(date_dir):
+                continue
+            if date >= cutoff_date:
+                continue
+            # Whole day is older than cutoff - nuke it
+            try:
+                for fn in os.listdir(date_dir):
+                    full = os.path.join(date_dir, fn)
+                    # Rough count: one turn per line
+                    try:
+                        with open(full, "r", encoding="utf-8") as f:
+                            pruned += sum(1 for _ in f)
+                    except OSError:
+                        pass
+                    try:
+                        os.unlink(full)
+                    except OSError:
+                        pass
+                os.rmdir(date_dir)
+            except OSError as e:
+                logger.warning("failed to prune %s: %s", date_dir, e)
+        return pruned

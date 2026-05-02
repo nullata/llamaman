@@ -1,6 +1,6 @@
 # LlamaMan
 
-![LlamaMan](https://raw.githubusercontent.com/nullata/llamaman/main/docs/llamaman-0.9.6.jpg)
+![LlamaMan](https://raw.githubusercontent.com/nullata/llamaman/main/docs/llamaman-1.0.0.jpg)
 
 A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances from inside a Docker container. Includes an Ollama-compatible API proxy so it works as a drop-in replacement for Ollama with [Open WebUI](https://github.com/open-webui/open-webui).
 
@@ -12,7 +12,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 - **Download manager** - pull models from HuggingFace with speed throttling and auto-retry on failure
 - **Model backup and restore** - export model metadata and presets to JSON, restore on any instance with downloads queued automatically for missing models
 - **Instance management** - stop, restart, remove, view live-streamed logs
-- **Container resource monitoring** - live CPU%, core quota, RAM usage, and GPU assignment per running instance card
+- **Container resource monitoring** - live CPU%, core quota, RAM usage with thin progress bars, and GPU assignment per running instance card
 - **GPU VRAM indicator** - per-GPU VRAM and utilization, queried natively (no running instance required)
 - **Idle timeout** - auto-sleep instances after configurable idle period, wake on next request
 - **Ollama-compatible proxy** - OpenWebUI discovers models and auto-starts servers on demand
@@ -27,7 +27,7 @@ A browser-based UI for launching, monitoring, and managing multiple [llama.cpp](
 
 - **Universal GPU support** - single image for NVIDIA, AMD (ROCm), Intel Arc, and CPU. GPU vendor auto-detected at startup; `LLAMA_IMAGE` auto-selected from the detected vendor. `GPU_TYPE` overrides if needed.
 - **Native GPU monitoring** - VRAM and utilization queried inside the llamaman container (pynvml for NVIDIA, `/sys/class/drm` sysfs for AMD/Intel Arc). GPU panel works without a running llama-server instance.
-- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment.
+- **Container resource monitoring** - each running instance card shows live CPU%, core quota, RAM used/limit, and GPU assignment with thin usage bars under each value.
 - **Docker image management** - pull any llama.cpp image by name, delete old local images from the Settings UI.
 - **Model backup and restore** - export model metadata and presets to JSON; restore on any instance with downloads queued automatically for missing models.
 - **Repeat penalty in proxy sampling overrides** - configurable per preset, default 0 (disabled).
@@ -294,6 +294,8 @@ Tables are auto-created on first connection.
 ## Per-Instance Proxy
 
 When **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides** are enabled for an instance, LlamaMan places a proxy in front of that instance's port. The proxy handles auth, concurrency gating, wake-on-request, and model name validation.
+
+Saving a preset propagates idle-timeout, queue, and proxy-sampling fields to running instances live without a relaunch. If the instance was launched with all three of the above off, no proxy was spawned, so toggling **Proxy Sampling Overrides** on live applies only to requests routed through the main app's Ollama/OpenAI compat endpoints; direct hits to the public port require a relaunch to take effect.
 
 On inference endpoints, if the request body includes a `"model"` field, the proxy validates it against the loaded model's filename stem. A prefix match is accepted (e.g. `"qwen2.5-0.5b-instruct-q2"` matches `"qwen2.5-0.5b-instruct-q2_k"`). A mismatch returns HTTP 404. Requests without a `"model"` field are forwarded unconditionally.
 

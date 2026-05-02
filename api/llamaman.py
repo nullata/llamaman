@@ -26,6 +26,7 @@ from core.helpers import (
     model_name_from_path,
 )
 from core.proxy_sampling import apply_proxy_sampling_overrides
+from core.request_log import record_request, SSEAccumulator
 from api.models import detect_quant, discover_models
 from storage import get_storage
 from core.state import instances, instances_lock, update_instance_stats
@@ -269,6 +270,7 @@ def _ensure_model_running(
             proxy_sampling_top_k=int(preset.get("proxy_sampling_top_k", 40)),
             proxy_sampling_top_p=float(preset.get("proxy_sampling_top_p", 0.95)),
             proxy_sampling_presence_penalty=float(preset.get("proxy_sampling_presence_penalty", 0.0)),
+            proxy_sampling_repeat_penalty=float(preset.get("proxy_sampling_repeat_penalty", 0.0)),
         )
         if err:
             return None, err
@@ -444,11 +446,15 @@ def _translate_to_openai(body: dict) -> dict:
 
 
 def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
-                     mode: str = "chat", inst_id: str | None = None):
+                     mode: str = "chat", inst_id: str | None = None,
+                     handle=None):
     t_start = time.monotonic()
     t_first_token = None
     prompt_tokens = 0
     completion_tokens = 0
+    accumulated: list[str] = []
+    final_usage: dict | None = None
+    final_status = 200
 
     def _content_field(token: str, thinking: str = ""):
         if mode == "chat":
@@ -500,6 +506,8 @@ def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
             raise last_err or ConnectionError("failed to connect to model server")
         if resp.status_code >= 400:
             error_text = resp.text[:500] if resp.text else f"HTTP {resp.status_code}"
+            final_status = resp.status_code
+            accumulated.append(f"Error: {error_text}")
             error_obj = {
                 "model": model_name,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -537,6 +545,8 @@ def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
                     if t_first_token is None:
                         t_first_token = time.monotonic()
                     completion_tokens += 1
+                    if token:
+                        accumulated.append(token)
 
                 chunk_obj = {
                     "model": model_name,
@@ -547,10 +557,13 @@ def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
                 yield json.dumps(chunk_obj, ensure_ascii=False) + "\n"
 
                 if finish:
+                    final_usage = chunk.get("usage", {}) or None
                     yield json.dumps(_done_obj(finish, chunk.get("usage", {})), ensure_ascii=False) + "\n"
                     return
 
     except Exception as e:
+        final_status = 500
+        accumulated.append(f"Error: {e}")
         error_obj = {
             "model": model_name,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -567,10 +580,21 @@ def _stream_llamaman(host: str, port: int, openai_body: dict, model_name: str,
             tps = completion_tokens / elapsed if elapsed > 0 else None
             ttft = ((t_first_token - t_start) * 1000) if t_first_token else None
             update_instance_stats(inst_id, tokens_per_sec=tps, ttft_ms=ttft)
+        if handle is not None:
+            usage = final_usage or {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+            }
+            handle.set_response(
+                text="".join(accumulated),
+                usage=usage,
+                status_code=final_status,
+            )
 
 
 def _proxy_non_streaming(host: str, port: int, openai_body: dict, model_name: str,
-                         mode: str = "chat", inst_id: str | None = None):
+                         mode: str = "chat", inst_id: str | None = None,
+                         handle=None):
     t_start = time.monotonic()
     openai_body["stream"] = False
     # Retry on connection errors (model may have just finished loading)
@@ -624,6 +648,14 @@ def _proxy_non_streaming(host: str, port: int, openai_body: dict, model_name: st
         tps = c_tokens / elapsed if elapsed > 0 and c_tokens else None
         update_instance_stats(inst_id, tokens_per_sec=tps)
 
+    if handle is not None:
+        if mode == "chat":
+            msg = result.get("message") or {}
+            resp_text = msg.get("content") or ""
+        else:
+            resp_text = result.get("response") or ""
+        handle.set_response(text=resp_text, usage=usage, status_code=200)
+
     return result
 
 
@@ -666,9 +698,20 @@ def _handle_request(mode: str = "chat"):
                     stats = instances[inst["id"]].setdefault("stats", {})
                     stats["model_load_time_s"] = round(time.time() - started, 1)
 
+    handle = record_request(
+        body,
+        endpoint=f"ollama_{mode}",
+        path=request.path,
+        inst_id=inst["id"],
+        model=model_name,
+    )
+
     gate = get_gate(inst["id"])
     if gate:
         if not gate.acquire(timeout=REQUEST_TIMEOUT):
+            if handle:
+                handle.set_error(429, "request queue full")
+                handle.finalize()
             return jsonify({"error": "request queue full"}), 429
 
     openai_body = _translate_to_openai(body)
@@ -684,23 +727,32 @@ def _handle_request(mode: str = "chat"):
         if stream:
             def _gated_stream():
                 try:
-                    yield from _stream_llamaman(server_host, server_port, openai_body, model_name, mode, inst_id=inst["id"])
+                    yield from _stream_llamaman(server_host, server_port, openai_body,
+                                                model_name, mode, inst_id=inst["id"],
+                                                handle=handle)
                 finally:
                     if gate:
                         gate.release()
+                    if handle:
+                        handle.finalize(streamed=True)
             stream_returned = True
             return Response(
                 _gated_stream(),
                 mimetype="application/x-ndjson",
             )
 
-        result = _proxy_non_streaming(server_host, server_port, openai_body, model_name, mode, inst_id=inst["id"])
+        result = _proxy_non_streaming(server_host, server_port, openai_body, model_name,
+                                      mode, inst_id=inst["id"], handle=handle)
         return jsonify(result)
     except Exception as e:
+        if handle:
+            handle.set_error(500, str(e))
         return jsonify({"error": str(e)}), 500
     finally:
         if gate and not stream_returned:
             gate.release()
+        if handle and not stream_returned:
+            handle.finalize(streamed=False)
 
 
 # ---------------------------------------------------------------------------
@@ -802,9 +854,20 @@ def llamaman_v1_chat():
                     stats = instances[inst_id].setdefault("stats", {})
                     stats["model_load_time_s"] = round(time.time() - started, 1)
 
+    handle = record_request(
+        body,
+        endpoint="openai_chat",
+        path=request.path,
+        inst_id=inst_id,
+        model=model_name,
+    )
+
     gate = get_gate(inst_id)
     if gate:
         if not gate.acquire(timeout=REQUEST_TIMEOUT):
+            if handle:
+                handle.set_error(429, "request queue full")
+                handle.finalize()
             return jsonify({"error": {"message": "request queue full"}}), 429
 
     stream = body.get("stream", False)
@@ -831,8 +894,12 @@ def llamaman_v1_chat():
             raise last_err or ConnectionError("failed to connect to model server")
         if stream:
             def _relay():
+                acc = SSEAccumulator() if handle else None
                 try:
-                    yield from resp.iter_content(chunk_size=None)
+                    for chunk in resp.iter_content(chunk_size=None):
+                        if acc is not None:
+                            acc.feed(chunk)
+                        yield chunk
                 finally:
                     resp.close()
                     if gate:
@@ -841,6 +908,11 @@ def llamaman_v1_chat():
                     # but still update timestamp and request count.
                     _touch_instance(inst_id)
                     update_instance_stats(inst_id)
+                    if handle:
+                        text, usage = acc.finish() if acc else ("", None)
+                        handle.set_response(text=text, usage=usage,
+                                            status_code=resp.status_code)
+                        handle.finalize(streamed=True)
             stream_returned = True
             return Response(
                 _relay(),
@@ -856,12 +928,22 @@ def llamaman_v1_chat():
             elapsed = time.monotonic() - t_start
             tps = c_tokens / elapsed if c_tokens and elapsed > 0 else None
             update_instance_stats(inst_id, tokens_per_sec=tps)
+            if handle:
+                choices = data.get("choices") or []
+                msg = (choices[0].get("message") if choices else {}) or {}
+                handle.set_response(text=msg.get("content") or "",
+                                    usage=usage,
+                                    status_code=resp.status_code)
             return jsonify(data), resp.status_code
     except Exception as e:
+        if handle:
+            handle.set_error(500, str(e))
         return jsonify({"error": {"message": str(e)}}), 500
     finally:
         if gate and not stream_returned:
             gate.release()
+        if handle and not stream_returned:
+            handle.finalize(streamed=False)
 
 
 @bp.route("/v1/embeddings", methods=["POST"])
@@ -889,25 +971,44 @@ def llamaman_v1_embeddings():
             if inst_id in instances:
                 instances[inst_id]["status"] = "healthy"
 
+    handle = record_request(
+        body,
+        endpoint="openai_embed",
+        path=request.path,
+        inst_id=inst_id,
+        model=model_name,
+    )
+
     last_err = None
     resp = None
-    for _attempt in range(3):
-        try:
-            resp = http_requests.post(
-                f"http://{server_host}:{server_port}/v1/embeddings",
-                json=body,
-                timeout=REQUEST_TIMEOUT,
-            )
-            break
-        except (http_requests.ConnectionError, http_requests.Timeout,
-                ConnectionRefusedError) as e:
-            last_err = e
-            time.sleep(2)
-    if resp is None:
-        return jsonify({"error": {"message": str(last_err)}}), 502
+    try:
+        for _attempt in range(3):
+            try:
+                resp = http_requests.post(
+                    f"http://{server_host}:{server_port}/v1/embeddings",
+                    json=body,
+                    timeout=REQUEST_TIMEOUT,
+                )
+                break
+            except (http_requests.ConnectionError, http_requests.Timeout,
+                    ConnectionRefusedError) as e:
+                last_err = e
+                time.sleep(2)
+        if resp is None:
+            if handle:
+                handle.set_error(502, str(last_err))
+            return jsonify({"error": {"message": str(last_err)}}), 502
 
-    _touch_instance(inst_id)
-    return jsonify(resp.json()), resp.status_code
+        _touch_instance(inst_id)
+        data = resp.json()
+        if handle:
+            handle.set_response(text=json.dumps(data, separators=(",", ":")),
+                                usage=data.get("usage"),
+                                status_code=resp.status_code)
+        return jsonify(data), resp.status_code
+    finally:
+        if handle:
+            handle.finalize(streamed=False)
 
 
 def _touch_instance(inst_id: str):

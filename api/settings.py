@@ -1,16 +1,59 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import json
+import os
+import tempfile
 import time
 import uuid
 
 from flask import Blueprint, jsonify, request
 
+from config import DATA_DIR, logger
 from storage import get_storage
+
+_SUBPROCESS_SETTINGS_FILE = os.path.join(DATA_DIR, "subprocess_settings.json")
+
+
+def snapshot_subprocess_settings() -> None:
+    """Mirror settings that subprocesses (downloader, etc.) need to a small
+    file that stays consistent regardless of which storage backend is canonical.
+
+    Subprocesses poll this file every second. Keeping it backend-agnostic means
+    live updates work identically on JSON and MariaDB.
+    """
+    try:
+        settings = get_storage().get_settings()
+    except Exception as e:
+        logger.warning("subprocess_settings snapshot: failed to read settings: %s", e)
+        return
+
+    payload = {
+        "global_speed_limit_mbps": float(settings.get("global_speed_limit_mbps", 0) or 0),
+    }
+
+    try:
+        dir_name = os.path.dirname(_SUBPROCESS_SETTINGS_FILE) or "."
+        fd, tmp = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, _SUBPROCESS_SETTINGS_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        logger.warning("subprocess_settings snapshot: failed to write: %s", e)
 
 bp = Blueprint("settings", __name__)
 
 DEFAULT_GLOBAL_SPEED_LIMIT_MBPS = 0.0
 DEFAULT_RETRY_COUNT_PER_FAILED_DOWNLOAD = 3
+DEFAULT_RECORDING_MODE = "off"
+VALID_RECORDING_MODES = ("off", "per_request", "per_conversation")
+DEFAULT_RECORDING_RETENTION_DAYS = 30
 
 
 def _get_hf_tokens() -> list[dict]:
@@ -65,6 +108,12 @@ def _coerce_min_int(value, default: int, minimum: int) -> int:
     return max(minimum, coerced)
 
 
+def _coerce_recording_mode(value, default: str = DEFAULT_RECORDING_MODE) -> str:
+    if isinstance(value, str) and value in VALID_RECORDING_MODES:
+        return value
+    return default
+
+
 def _normalize_settings_patch(settings: dict) -> dict:
     normalized = dict(settings)
     if "global_speed_limit_mbps" in normalized:
@@ -83,6 +132,17 @@ def _normalize_settings_patch(settings: dict) -> dict:
             default=DEFAULT_RETRY_COUNT_PER_FAILED_DOWNLOAD,
             minimum=1,
         )
+    if "recording_mode" in normalized:
+        normalized["recording_mode"] = _coerce_recording_mode(
+            normalized.get("recording_mode"),
+            default=DEFAULT_RECORDING_MODE,
+        )
+    if "recording_retention_days" in normalized:
+        normalized["recording_retention_days"] = _coerce_min_int(
+            normalized.get("recording_retention_days"),
+            default=DEFAULT_RECORDING_RETENTION_DAYS,
+            minimum=0,
+        )
     return normalized
 
 
@@ -100,6 +160,15 @@ def _apply_settings_defaults(settings: dict) -> dict:
         normalized.get("retry_count_per_failed_download"),
         default=DEFAULT_RETRY_COUNT_PER_FAILED_DOWNLOAD,
         minimum=1,
+    )
+    normalized["recording_mode"] = _coerce_recording_mode(
+        normalized.get("recording_mode"),
+        default=DEFAULT_RECORDING_MODE,
+    )
+    normalized["recording_retention_days"] = _coerce_min_int(
+        normalized.get("recording_retention_days"),
+        default=DEFAULT_RECORDING_RETENTION_DAYS,
+        minimum=0,
     )
     return normalized
 
@@ -138,6 +207,11 @@ def save_settings():
     data = request.get_json(silent=True) or {}
     data.pop("huggingface_tokens", None)
     settings = get_storage().merge_settings(_normalize_settings_patch(data))
+    if "recording_mode" in data:
+        from core.request_log import invalidate_cache as _invalidate_recording_cache
+        _invalidate_recording_cache()
+    if "global_speed_limit_mbps" in data:
+        snapshot_subprocess_settings()
     return jsonify({"ok": True, "settings": _sanitize_settings(settings)})
 
 

@@ -150,6 +150,18 @@ async function loadSettings() {
     const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
     if (ollamaOverrideToggle) ollamaOverrideToggle.checked = !!s.allow_ollama_api_override_admin;
 
+    const recordingModeSelect = document.getElementById('s-recording-mode');
+    if (recordingModeSelect) {
+      const mode = s.recording_mode === 'per_request' || s.recording_mode === 'per_conversation'
+        ? s.recording_mode : 'off';
+      recordingModeSelect.value = mode;
+    }
+    const recordingRetentionInput = document.getElementById('s-recording-retention-days');
+    if (recordingRetentionInput) {
+      const days = Number.isFinite(Number(s.recording_retention_days)) ? Number(s.recording_retention_days) : 30;
+      recordingRetentionInput.value = String(Math.max(0, days));
+    }
+
     const staleEnabled = document.getElementById('s-stale-records-enabled');
     if (staleEnabled) staleEnabled.checked = !!c.stale_records_enabled;
     const staleInterval = document.getElementById('s-stale-records-interval');
@@ -258,11 +270,18 @@ async function saveRequireAuth() {
 async function saveAppSettings() {
   const adminToggle = document.getElementById('s-admin-ui-enforce-max-models');
   const ollamaToggle = document.getElementById('s-allow-ollama-override-admin');
-  if (!adminToggle && !ollamaToggle) return;
+  const recordingModeSelect = document.getElementById('s-recording-mode');
+  const recordingRetentionInput = document.getElementById('s-recording-retention-days');
+  if (!adminToggle && !ollamaToggle && !recordingModeSelect && !recordingRetentionInput) return;
   try {
     const payload = {};
     if (adminToggle) payload.admin_ui_enforce_max_models = adminToggle.checked;
     if (ollamaToggle) payload.allow_ollama_api_override_admin = ollamaToggle.checked;
+    if (recordingModeSelect) payload.recording_mode = recordingModeSelect.value;
+    if (recordingRetentionInput) {
+      const n = parseInt(recordingRetentionInput.value, 10);
+      payload.recording_retention_days = Number.isFinite(n) && n >= 0 ? n : 30;
+    }
     const res = await apiFetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -347,6 +366,16 @@ if (adminUiEvictionToggle) {
 const ollamaOverrideToggle = document.getElementById('s-allow-ollama-override-admin');
 if (ollamaOverrideToggle) {
   ollamaOverrideToggle.addEventListener('change', saveAppSettings);
+}
+
+const recordingModeSelect = document.getElementById('s-recording-mode');
+if (recordingModeSelect) {
+  recordingModeSelect.addEventListener('change', saveAppSettings);
+}
+
+const recordingRetentionInput = document.getElementById('s-recording-retention-days');
+if (recordingRetentionInput) {
+  recordingRetentionInput.addEventListener('change', saveAppSettings);
 }
 
 const downloadModelsJsonBtn = document.getElementById('btn-download-models-json');

@@ -12,6 +12,7 @@ from werkzeug.wrappers import Request as WerkzeugRequest
 from config import REQUEST_TIMEOUT, logger
 from core.helpers import model_name_from_path
 from core.proxy_sampling import PROXY_SAMPLING_PATHS, apply_proxy_sampling_overrides
+from core.request_log import record_request, SSEAccumulator
 from core.state import instances, instances_lock
 
 
@@ -216,11 +217,10 @@ def _check_proxy_auth(environ, start_response):
     return True
 
 
-def _extract_model_from_request(environ: dict) -> str | None:
-    """Extract the 'model' field from a JSON request body, if present.
-
-    Only inspects POST requests to inference endpoints. Buffers the body
-    so it remains available for the actual proxy forwarding.
+def _peek_inference_body(environ: dict) -> dict | None:
+    """Parse the request body for inference endpoints, rewinding wsgi.input
+    so the downstream proxy read still sees the bytes. Returns None for
+    non-inference or unparseable requests.
     """
     if environ.get("REQUEST_METHOD", "GET").upper() != "POST":
         return None
@@ -230,11 +230,20 @@ def _extract_model_from_request(environ: dict) -> str | None:
     try:
         content_length = int(environ.get("CONTENT_LENGTH") or 0)
         body = environ["wsgi.input"].read(content_length)
-        environ["wsgi.input"] = io.BytesIO(body)  # rewind for later use
-        data = json.loads(body.decode("utf-8"))
-        return data.get("model", "").strip() or None
+        environ["wsgi.input"] = io.BytesIO(body)
+        return json.loads(body.decode("utf-8"))
     except Exception:
         return None
+
+
+def _extract_model_from_request(environ: dict) -> str | None:
+    data = _peek_inference_body(environ)
+    if not data:
+        return None
+    model = data.get("model") if isinstance(data, dict) else None
+    if isinstance(model, str):
+        return model.strip() or None
+    return None
 
 
 def _model_matches(inst_model_path: str, requested_model: str) -> bool:
@@ -268,8 +277,14 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
         if _check_proxy_auth(environ, start_response):
             return [json.dumps({"error": "API key required"}).encode()]
 
-        # Extract model name from request body (for inference endpoints only)
-        requested_model = _extract_model_from_request(environ)
+        # Parse body once for inference endpoints; used for both model
+        # extraction and (optionally) the recording pipeline.
+        parsed_body = _peek_inference_body(environ)
+        if isinstance(parsed_body, dict):
+            _m = parsed_body.get("model")
+            requested_model = _m.strip() if isinstance(_m, str) and _m.strip() else None
+        else:
+            requested_model = None
 
         with instances_lock:
             inst = instances.get(inst_id)
@@ -353,6 +368,14 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": "request queue full"}).encode()]
 
+        handle = record_request(
+            parsed_body if isinstance(parsed_body, dict) else None,
+            endpoint="proxy",
+            path=environ.get("PATH_INFO", ""),
+            inst_id=effective_id,
+            model=requested_model or "",
+        ) if _is_inference_request(environ) else None
+
         try:
             req = WerkzeugRequest(environ)
             target = f"http://{effective_host}:{effective_port}{req.path}"
@@ -394,6 +417,9 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
                 if gate:
                     gate.release()
                     gate = None  # prevent double-release in except block
+                if handle:
+                    handle.set_error(502, str(last_err))
+                    handle.finalize()
                 start_response("502 Bad Gateway",
                                [("Content-Type", "application/json")])
                 return [json.dumps({"error": str(last_err)}).encode()]
@@ -404,17 +430,56 @@ def make_proxy_app(inst_id: str, internal_port: int, proxy_port: int):
             ]
             start_response(f"{resp.status_code} {resp.reason}", resp_headers)
 
+            content_type = (resp.headers.get("Content-Type") or "").lower()
+            is_sse = "text/event-stream" in content_type
+
             def _relay_and_close():
+                acc = SSEAccumulator() if (handle and is_sse) else None
+                # Non-SSE capture: buffer up to a cap so we don't bloat memory
+                # on large/binary responses. 256KB is enough for a typical
+                # non-streaming chat/embeddings reply.
+                buf: bytearray | None = bytearray() if (handle and not is_sse) else None
+                BUF_CAP = 256 * 1024
                 try:
-                    yield from resp.iter_content(chunk_size=None)
+                    for chunk in resp.iter_content(chunk_size=None):
+                        if acc is not None:
+                            acc.feed(chunk)
+                        elif buf is not None and len(buf) < BUF_CAP:
+                            buf.extend(chunk[: BUF_CAP - len(buf)])
+                        yield chunk
                 finally:
                     resp.close()
                     if gate:
                         gate.release()
+                    if handle:
+                        text = ""
+                        usage = None
+                        if acc is not None:
+                            text, usage = acc.finish()
+                        elif buf is not None:
+                            try:
+                                text = bytes(buf).decode("utf-8")
+                            except UnicodeDecodeError:
+                                text = f"<binary {len(buf)}B>"
+                            # Best-effort usage extraction from JSON responses
+                            try:
+                                parsed = json.loads(text) if text else None
+                                if isinstance(parsed, dict):
+                                    u = parsed.get("usage")
+                                    if isinstance(u, dict):
+                                        usage = u
+                            except (json.JSONDecodeError, ValueError):
+                                pass
+                        handle.set_response(text=text, usage=usage,
+                                            status_code=resp.status_code)
+                        handle.finalize(streamed=is_sse)
             return _relay_and_close()
-        except Exception:
+        except Exception as e:
             if gate:
                 gate.release()
+            if handle:
+                handle.set_error(500, str(e))
+                handle.finalize()
             raise
 
     return proxy_app
