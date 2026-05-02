@@ -682,6 +682,23 @@ select option {
   gap: 8px;
 }
 
+.inst-resource-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.inst-resource-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 140px;
+}
+
+.inst-mini-bar {
+  height: 4px;
+}
+
 .instance-queue-label {
   color: var(--muted);
 }

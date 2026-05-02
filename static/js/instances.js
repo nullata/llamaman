@@ -31,23 +31,47 @@ async function pollContainerStats() {
 
 function formatResourceLine(stat) {
   if (!stat) return '';
-  const parts = [];
+  const cells = [];
+
   if (stat.cpu_pct != null) {
     const cores = stat.cpu_quota || stat.num_cpus || 1;
-    const normalized = (stat.cpu_pct / cores).toFixed(1);
-    parts.push(`CPU ${normalized}% / ${cores} core${cores !== 1 ? 's' : ''}`);
+    const normalized = stat.cpu_pct / cores;
+    const pct = clampPercent(normalized);
+    const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+    cells.push(`
+      <div class="inst-resource-cell">
+        <div>CPU ${normalized.toFixed(1)}% / ${cores} core${cores !== 1 ? 's' : ''}</div>
+        <div class="gpu-bar-track inst-mini-bar"><div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div></div>
+      </div>
+    `);
   }
+
   if (stat.mem_used_mb != null) {
     const usedGb = (stat.mem_used_mb / 1024).toFixed(1);
     const limGb  = (stat.mem_limit_mb / 1024).toFixed(1);
-    parts.push(stat.mem_limit_mb > 0
+    const text = stat.mem_limit_mb > 0
       ? `RAM ${usedGb} GB / ${limGb} GB`
-      : `RAM ${usedGb} GB`);
+      : `RAM ${usedGb} GB`;
+    let bar = '';
+    if (stat.mem_limit_mb > 0) {
+      const pct = clampPercent((stat.mem_used_mb / stat.mem_limit_mb) * 100);
+      const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
+      bar = `<div class="gpu-bar-track inst-mini-bar"><div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div></div>`;
+    }
+    cells.push(`
+      <div class="inst-resource-cell">
+        <div>${text}</div>
+        ${bar}
+      </div>
+    `);
   }
+
   if (stat.gpus && stat.gpus.length > 0) {
-    parts.push(stat.gpus.join(', '));
+    cells.push(`<div class="inst-resource-cell"><div>${stat.gpus.join(', ')}</div></div>`);
   }
-  return parts.join(' &nbsp;·&nbsp; ');
+
+  if (cells.length === 0) return '';
+  return `<div class="inst-resource-grid">${cells.join('')}</div>`;
 }
 
 function renderInstances() {
