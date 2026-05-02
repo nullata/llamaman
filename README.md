@@ -198,6 +198,15 @@ When you select a GGUF model, LlamaMan reads the file's metadata to detect the t
 | **Presence Penalty** | `0.0` | Presence penalty to enforce (range: `-2.0`–`2.0`). Only active when proxy sampling overrides are enabled. |
 | **Repeat Penalty** | `0.0` | Repeat penalty to enforce (range: `0.0`–`2.0`). `0` = disabled (not injected). Only active when proxy sampling overrides are enabled. |
 
+### Live preset updates
+
+Saving a preset (**Save Preset** in the Launch tab) updates already-running instances of that model in place where possible, so most parameter tweaks don't require a relaunch:
+
+- **Apply live (no relaunch needed):** `idle_timeout_min`, `max_concurrent`, `max_queue_depth`, `share_queue`, and all six proxy-sampling fields (`proxy_sampling_override_enabled`, `temperature`, `top_k`, `top_p`, `presence_penalty`, `repeat_penalty`). The reaper re-reads idle timeout each tick, the request gate is refreshed in place, and the proxy + compat routes read sampling fields from the instance config per request.
+- **Require relaunch:** everything baked into the llama-server container at launch - GPU layers, context size, threads, memory limit, parallel slots, GPU devices, embedding flag, extra args.
+
+**Caveat for proxy-sampling toggles:** if the instance was launched with `idle_timeout = 0`, `max_concurrent = 0`, **and** `override_enabled = false`, no sidecar proxy was spawned (see [Per-Instance Proxy](#per-instance-proxy)). Toggling `override_enabled = true` live still applies overrides on requests routed through the main app's Ollama/OpenAI compat endpoints, but direct hits to the public port go straight to llama-server and bypass the override. Relaunch the instance to spawn the proxy in that case.
+
 ### Concurrency and queueing
 
 When **Max Concurrent** is set to a value greater than 0, LlamaMan places a concurrency gate in front of the instance. Requests that exceed the limit are held in a FIFO queue (up to **Max Queue Depth**). If the queue is also full, new requests are rejected with HTTP 429.

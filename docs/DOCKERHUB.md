@@ -295,6 +295,8 @@ Tables are auto-created on first connection.
 
 When **Idle Timeout**, **Max Concurrent**, or **Proxy Sampling Overrides** are enabled for an instance, LlamaMan places a proxy in front of that instance's port. The proxy handles auth, concurrency gating, wake-on-request, and model name validation.
 
+Saving a preset propagates idle-timeout, queue, and proxy-sampling fields to running instances live without a relaunch. If the instance was launched with all three of the above off, no proxy was spawned, so toggling **Proxy Sampling Overrides** on live applies only to requests routed through the main app's Ollama/OpenAI compat endpoints; direct hits to the public port require a relaunch to take effect.
+
 On inference endpoints, if the request body includes a `"model"` field, the proxy validates it against the loaded model's filename stem. A prefix match is accepted (e.g. `"qwen2.5-0.5b-instruct-q2"` matches `"qwen2.5-0.5b-instruct-q2_k"`). A mismatch returns HTTP 404. Requests without a `"model"` field are forwarded unconditionally.
 
 For sleeping instances, a mismatched model name returns 404 without waking the instance.
