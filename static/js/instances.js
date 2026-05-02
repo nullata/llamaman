@@ -31,17 +31,18 @@ async function pollContainerStats() {
 
 function formatResourceLine(stat) {
   if (!stat) return '';
-  const cells = [];
+  const rows = [];
 
   if (stat.cpu_pct != null) {
     const cores = stat.cpu_quota || stat.num_cpus || 1;
     const normalized = stat.cpu_pct / cores;
     const pct = clampPercent(normalized);
     const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
-    cells.push(`
-      <div class="inst-resource-cell">
-        <div>CPU ${normalized.toFixed(1)}% / ${cores} core${cores !== 1 ? 's' : ''}</div>
+    rows.push(`
+      <div class="gpu-bar-row inst-bar-row">
+        <span class="gpu-bar-label">CPU</span>
         <div class="gpu-bar-track inst-mini-bar"><div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div></div>
+        <span class="gpu-bar-text">${normalized.toFixed(1)}% / ${cores} core${cores !== 1 ? 's' : ''}</span>
       </div>
     `);
   }
@@ -50,28 +51,28 @@ function formatResourceLine(stat) {
     const usedGb = (stat.mem_used_mb / 1024).toFixed(1);
     const limGb  = (stat.mem_limit_mb / 1024).toFixed(1);
     const text = stat.mem_limit_mb > 0
-      ? `RAM ${usedGb} GB / ${limGb} GB`
-      : `RAM ${usedGb} GB`;
-    let bar = '';
+      ? `${usedGb} GB / ${limGb} GB`
+      : `${usedGb} GB`;
+    let barInner = '';
     if (stat.mem_limit_mb > 0) {
       const pct = clampPercent((stat.mem_used_mb / stat.mem_limit_mb) * 100);
       const color = pct > 90 ? 'var(--red)' : pct > 70 ? 'var(--yellow)' : 'var(--green)';
-      bar = `<div class="gpu-bar-track inst-mini-bar"><div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div></div>`;
+      barInner = `<div class="gpu-bar-fill" style="width:${pct}%;background:${color};"></div>`;
     }
-    cells.push(`
-      <div class="inst-resource-cell">
-        <div>${text}</div>
-        ${bar}
+    rows.push(`
+      <div class="gpu-bar-row inst-bar-row">
+        <span class="gpu-bar-label">RAM</span>
+        <div class="gpu-bar-track inst-mini-bar">${barInner}</div>
+        <span class="gpu-bar-text">${text}</span>
       </div>
     `);
   }
 
   if (stat.gpus && stat.gpus.length > 0) {
-    cells.push(`<div class="inst-resource-cell"><div>${stat.gpus.join(', ')}</div></div>`);
+    rows.push(`<div class="inst-bar-gpu">${stat.gpus.join(', ')}</div>`);
   }
 
-  if (cells.length === 0) return '';
-  return `<div class="inst-resource-grid">${cells.join('')}</div>`;
+  return rows.join('');
 }
 
 function renderInstances() {

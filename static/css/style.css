@@ -682,21 +682,29 @@ select option {
   gap: 8px;
 }
 
-.inst-resource-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
+.inst-bar-row {
+  margin-bottom: 2px;
+  font-size: 11px;
 }
 
-.inst-resource-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 140px;
+.inst-bar-row .gpu-bar-label {
+  min-width: 30px;
 }
 
-.inst-mini-bar {
-  height: 4px;
+.inst-bar-row .gpu-bar-text {
+  min-width: 0;
+  text-align: left;
+  color: var(--muted);
+}
+
+.inst-bar-row .inst-mini-bar {
+  height: 5px;
+}
+
+.inst-bar-gpu {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .instance-queue-label {
