@@ -60,3 +60,24 @@ pollDownloads();
 loadSettings();
 loadApiKeys();
 loadImages();
+
+// Info-tip clipping fallback: when a centered tooltip would extend past the
+// viewport, switch to anchoring it on the icon's right (or left) edge.
+// Tooltip max-width is 240px; centered means up to 120px on either side.
+function updateInfoTipClipping(tip) {
+  const rect = tip.getBoundingClientRect();
+  const center = rect.left + rect.width / 2;
+  const halfMax = 120;
+  const overflowsRight = center + halfMax > window.innerWidth;
+  const overflowsLeft = center - halfMax < 0;
+  tip.classList.toggle('clip-right', overflowsRight);
+  tip.classList.toggle('clip-left', !overflowsRight && overflowsLeft);
+}
+document.addEventListener('mouseover', (e) => {
+  const tip = e.target.closest && e.target.closest('.info-tip');
+  if (tip) updateInfoTipClipping(tip);
+});
+document.addEventListener('focusin', (e) => {
+  const tip = e.target.closest && e.target.closest('.info-tip');
+  if (tip) updateInfoTipClipping(tip);
+});
