@@ -1,0 +1,65 @@
+# Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
+
+"""Versioned schema migrations.
+
+Each migration mutates persistent state (SQL columns, on-disk file formats,
+etc.) in an idempotent way and bumps the recorded schema_version when done.
+Migrations run on every app startup; already-applied ones are skipped via
+the version check inside an advisory lock.
+
+To add a migration:
+    1. Implement the work as a method on each storage backend.
+    2. Add a wrapper here that dispatches to the active backend.
+    3. Append it to MIGRATIONS keyed by its version number.
+    4. Bump CURRENT_SCHEMA_VERSION.
+
+Migration code never reverts. If you need to roll back, write migration N+1
+that does the reversal.
+"""
+
+import logging
+
+logger = logging.getLogger("llamaman")
+
+
+CURRENT_SCHEMA_VERSION = 1
+
+
+def _migrate_001_timestamps(storage) -> None:
+    """Convert legacy epoch-int timestamps to native datetime / ISO strings."""
+    storage.apply_migration_001_timestamps()
+
+
+MIGRATIONS = {
+    1: _migrate_001_timestamps,
+}
+
+
+def run_pending_migrations(storage) -> None:
+    """Run any unapplied migrations under an advisory lock. Aborts startup if
+    a migration raises.
+
+    Called once at app boot before any code that reads timestamp-affected
+    tables. Multiple gunicorn workers race here, but the storage-level lock
+    ensures only one runs the actual migration; the rest re-read the version
+    inside the lock and skip.
+    """
+    current = storage.get_schema_version()
+    if current >= CURRENT_SCHEMA_VERSION:
+        return
+
+    logger.info(
+        "schema_version=%d, target=%d - running pending migrations",
+        current, CURRENT_SCHEMA_VERSION,
+    )
+    with storage.migration_lock():
+        # Re-read inside the lock: another worker may have just finished.
+        current = storage.get_schema_version()
+        for v in sorted(MIGRATIONS):
+            if v <= current:
+                continue
+            logger.info("Migration %d: starting", v)
+            MIGRATIONS[v](storage)
+            storage.set_schema_version(v)
+            logger.info("Migration %d: done", v)
+    logger.info("All migrations applied.")

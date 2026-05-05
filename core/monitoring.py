@@ -2,6 +2,7 @@
 
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -219,8 +220,8 @@ def _prune_request_log():
         days = 30
     if days <= 0:
         return  # 0 = keep forever
-    cutoff_ms = int((time.time() - days * 86400) * 1000)
-    pruned = storage.prune_request_log(cutoff_ms)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    pruned = storage.prune_request_log(cutoff)
     if pruned:
         logger.info("request_log: pruned %d records older than %d days", pruned, days)
 

@@ -1,14 +1,17 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import contextlib
 import hashlib
 import json
 import logging
 import os
 import tempfile
 import threading
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 
+from core.timeutil import epoch_ms_to_iso, epoch_s_to_iso, parse_iso, to_iso
 from storage.base import StorageBackend
 
 logger = logging.getLogger("llamaman")
@@ -62,6 +65,110 @@ class JsonBackend(StorageBackend):
         self._state_lock = threading.Lock()
         self._settings_lock = threading.Lock()
         self._request_log_lock = threading.Lock()
+        self._migration_lock_path = os.path.join(
+            os.path.dirname(self._settings_file) or ".", ".migration.lock"
+        )
+
+    # -- Migrations --
+
+    @contextlib.contextmanager
+    def migration_lock(self):
+        """Filesystem lockfile so a second process can't run migrations
+        concurrently. We don't use fcntl here because Windows doesn't have it
+        and the dev experience matters; an atomic O_CREAT|O_EXCL is enough.
+        """
+        deadline = time.time() + 60
+        while True:
+            try:
+                fd = os.open(self._migration_lock_path,
+                             os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.close(fd)
+                break
+            except FileExistsError:
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"Could not acquire migration lock at {self._migration_lock_path} "
+                        "within 60s. If no other process is running, delete the file."
+                    )
+                time.sleep(0.5)
+        try:
+            yield
+        finally:
+            try:
+                os.unlink(self._migration_lock_path)
+            except OSError:
+                pass
+
+    def apply_migration_001_timestamps(self) -> None:
+        # api_keys.json: created_at int(epoch s) -> ISO string
+        try:
+            keys = self._read_api_keys()
+        except Exception:
+            keys = []
+        changed = False
+        for k in keys:
+            c = k.get("created_at")
+            if isinstance(c, (int, float)) and c > 0:
+                k["created_at"] = epoch_s_to_iso(c)
+                changed = True
+        if changed:
+            logger.info("Migration 001: rewriting api_keys.json with ISO timestamps")
+            self._write_api_keys(keys)
+
+        # request_log/*: rewrite each .jsonl record's created_at int(ms) -> ISO
+        if not os.path.isdir(self._recordings_dir):
+            return
+        rewritten = 0
+        for date in os.listdir(self._recordings_dir):
+            date_dir = os.path.join(self._recordings_dir, date)
+            if not os.path.isdir(date_dir):
+                continue
+            for fn in os.listdir(date_dir):
+                if not fn.endswith(".jsonl"):
+                    continue
+                full = os.path.join(date_dir, fn)
+                try:
+                    with open(full, "r", encoding="utf-8") as f:
+                        lines = f.readlines()
+                except OSError:
+                    continue
+                file_changed = False
+                out_lines = []
+                for line in lines:
+                    s = line.strip()
+                    if not s:
+                        out_lines.append(line)
+                        continue
+                    try:
+                        rec = json.loads(s)
+                    except (json.JSONDecodeError, ValueError):
+                        out_lines.append(line)
+                        continue
+                    c = rec.get("created_at")
+                    if isinstance(c, (int, float)):
+                        rec["created_at"] = epoch_ms_to_iso(c)
+                        out_lines.append(json.dumps(
+                            rec, separators=(",", ":"), ensure_ascii=False) + "\n")
+                        file_changed = True
+                    else:
+                        out_lines.append(line)
+                if file_changed:
+                    # Atomic rewrite: write to tmp + rename so a crash mid-write
+                    # leaves the original file intact.
+                    tmp = full + ".tmp"
+                    try:
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            f.writelines(out_lines)
+                        os.replace(tmp, full)
+                        rewritten += 1
+                    except OSError as e:
+                        logger.warning("Migration 001: failed to rewrite %s: %s", full, e)
+                        try:
+                            os.unlink(tmp)
+                        except OSError:
+                            pass
+        if rewritten:
+            logger.info("Migration 001: rewrote %d request_log files", rewritten)
 
     # -- State helpers --
 
@@ -207,12 +314,24 @@ class JsonBackend(StorageBackend):
             logger.warning("request_log append skipped: missing conversation_id or created_at")
             return
 
-        date = datetime.fromtimestamp(int(created_at) / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        # Normalize to a datetime for path derivation, then to ISO for storage.
+        if isinstance(created_at, datetime):
+            dt = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+        elif isinstance(created_at, (int, float)):
+            # Legacy: producer fed us epoch ms.
+            dt = datetime.fromtimestamp(int(created_at) / 1000, tz=timezone.utc)
+        else:
+            dt = parse_iso(str(created_at))
+        record = {**record, "created_at": to_iso(dt)}
+
+        date = dt.strftime("%Y-%m-%d")
         date_dir = os.path.join(self._recordings_dir, date)
 
         if mode == "per_request":
-            # Unique filename per record; each turn is its own single-line file.
-            filename = f"{int(created_at)}_{conv_id[:8]}.jsonl"
+            # Unique filename per record; sortable lexicographically inside the
+            # date dir. Colons are filename-unsafe on Windows so use dashes.
+            time_part = dt.strftime("%H-%M-%S-") + f"{dt.microsecond // 1000:03d}Z"
+            filename = f"{time_part}_{conv_id[:8]}.jsonl"
         else:
             # per_conversation: append to the conversation's file.
             filename = f"{conv_id}.jsonl"
@@ -227,6 +346,17 @@ class JsonBackend(StorageBackend):
                     f.write(line)
             except Exception as e:
                 logger.warning("request_log append failed (%s): %s", path, e)
+
+    @staticmethod
+    def _normalize_created_at(rec: dict) -> dict:
+        """Return rec with created_at as an ISO string. Legacy records may
+        carry an int (epoch ms); convert in-place at the read boundary so
+        callers don't need to know.
+        """
+        c = rec.get("created_at")
+        if isinstance(c, (int, float)):
+            rec["created_at"] = epoch_ms_to_iso(c)
+        return rec
 
     def _iter_request_log_records(self):
         """Yield every record dict across all date dirs, with (date_dir, filename, line_no)."""
@@ -247,9 +377,10 @@ class JsonBackend(StorageBackend):
                             if not line:
                                 continue
                             try:
-                                yield json.loads(line), full
+                                rec = json.loads(line)
                             except (json.JSONDecodeError, ValueError):
                                 continue
+                            yield self._normalize_created_at(rec), full
                 except OSError:
                     continue
 
@@ -259,7 +390,7 @@ class JsonBackend(StorageBackend):
             cid = rec.get("conversation_id")
             if not cid:
                 continue
-            created = rec.get("created_at") or 0
+            created = rec.get("created_at") or ""
             entry = rollup.get(cid)
             if entry is None:
                 entry = {
@@ -272,9 +403,11 @@ class JsonBackend(StorageBackend):
                 }
                 rollup[cid] = entry
             entry["turn_count"] += 1
-            if created < entry["first_seen_at"] or not entry["first_seen_at"]:
+            # ISO 8601 UTC strings sort lexicographically the same way they
+            # sort chronologically, so plain string compare is correct here.
+            if not entry["first_seen_at"] or (created and created < entry["first_seen_at"]):
                 entry["first_seen_at"] = created
-            if created > entry["last_seen_at"]:
+            if created and created > entry["last_seen_at"]:
                 entry["last_seen_at"] = created
             # Title = first user message from the first (earliest) request body
             if not entry["title"]:
@@ -293,7 +426,7 @@ class JsonBackend(StorageBackend):
                             entry["title"] = prompt[:120]
                 except (json.JSONDecodeError, ValueError, TypeError):
                     pass
-        out = sorted(rollup.values(), key=lambda e: e["last_seen_at"], reverse=True)
+        out = sorted(rollup.values(), key=lambda e: e["last_seen_at"] or "", reverse=True)
         return out[:limit]
 
     def get_conversation_turns(self, conversation_id: str) -> list[dict]:
@@ -301,14 +434,20 @@ class JsonBackend(StorageBackend):
         for rec, _ in self._iter_request_log_records():
             if rec.get("conversation_id") == conversation_id:
                 turns.append(rec)
-        turns.sort(key=lambda r: r.get("created_at") or 0)
+        turns.sort(key=lambda r: r.get("created_at") or "")
         return turns
 
-    def prune_request_log(self, older_than_ms: int) -> int:
+    def prune_request_log(self, older_than) -> int:
         if not os.path.isdir(self._recordings_dir):
             return 0
         pruned = 0
-        cutoff_date = datetime.fromtimestamp(older_than_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+        if isinstance(older_than, str):
+            cutoff_dt = parse_iso(older_than)
+        elif isinstance(older_than, datetime):
+            cutoff_dt = older_than if older_than.tzinfo else older_than.replace(tzinfo=timezone.utc)
+        else:
+            raise TypeError(f"prune_request_log expects datetime or ISO str, got {type(older_than)}")
+        cutoff_date = cutoff_dt.astimezone(timezone.utc).strftime("%Y-%m-%d")
         for date in os.listdir(self._recordings_dir):
             date_dir = os.path.join(self._recordings_dir, date)
             if not os.path.isdir(date_dir):

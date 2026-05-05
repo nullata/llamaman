@@ -8,9 +8,11 @@ from flask import Flask, jsonify, make_response, render_template
 from werkzeug.serving import make_server
 
 from config import LLAMAMAN_PROXY_PORT, SECRET_KEY, logger
+from core.migrations import run_pending_migrations
 from core.state import load_state
 from proxy import start_idle_proxy
 from core.monitoring import start_background_poller
+from storage import get_storage
 
 import api.auth as auth
 import api.models as models
@@ -73,6 +75,11 @@ def create_app() -> Flask:
 # ---------------------------------------------------------------------------
 # Startup - runs on import (works for both gunicorn and python app.py)
 # ---------------------------------------------------------------------------
+
+# Run any pending schema migrations before anything reads timestamp-affected
+# tables. Aborts startup on failure - serving traffic on a half-migrated
+# schema is worse than a hard crash that surfaces in logs.
+run_pending_migrations(get_storage())
 
 # Load persisted state (instances, downloads) and collect proxies to restore
 _deferred_proxies = load_state()

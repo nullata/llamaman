@@ -1,17 +1,20 @@
 # Copyright (c) LlamaMan. Licensed under the Elastic License 2.0 - see LICENSE.
 
+import contextlib
 import hashlib
 import json
 import logging
 from copy import deepcopy
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     create_engine, Column, String, Integer, Float, Boolean, Text, func,
-    BigInteger, SmallInteger,
+    BigInteger, SmallInteger, DateTime, text,
 )
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
+from core.timeutil import to_iso, parse_iso
 from storage.base import StorageBackend
 
 logger = logging.getLogger("llamaman")
@@ -69,7 +72,7 @@ class ApiKeyRow(Base):
     name = Column(String(255), default="")
     key_hash = Column(String(64), nullable=False)
     prefix = Column(String(16), default="")
-    created_at = Column(Integer, default=0)
+    created_at = Column(DateTime, nullable=True)
 
 
 class RequestLogRow(Base):
@@ -80,7 +83,7 @@ class RequestLogRow(Base):
     model = Column(String(255), index=True, default="")
     endpoint = Column(String(32), default="")
     path = Column(String(128), default="")
-    created_at = Column(BigInteger, index=True)
+    created_at = Column(DateTime(fsp=3), index=True)
     duration_ms = Column(Integer, nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
@@ -105,6 +108,99 @@ class MariaDBBackend(StorageBackend):
 
     def _session(self):
         return self._session_factory()
+
+    # -- Migrations --
+
+    @contextlib.contextmanager
+    def migration_lock(self):
+        """Server-side advisory lock so concurrent gunicorn workers don't both
+        run migrations. The lock is released automatically on connection close
+        but we explicitly release as well to be safe.
+        """
+        conn = self._engine.connect()
+        try:
+            got = conn.execute(text("SELECT GET_LOCK('llamaman_migration', 60)")).scalar()
+            if not got:
+                raise RuntimeError("Could not acquire MariaDB migration advisory lock within 60s")
+            try:
+                yield
+            finally:
+                conn.execute(text("SELECT RELEASE_LOCK('llamaman_migration')"))
+        finally:
+            conn.close()
+
+    def _column_type(self, table: str, column: str) -> str | None:
+        """Return the lowercased DATA_TYPE of a column, or None if missing."""
+        with self._engine.connect() as conn:
+            row = conn.execute(text(
+                "SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :t AND COLUMN_NAME = :c"
+            ), {"t": table, "c": column}).first()
+        return row[0].lower() if row else None
+
+    def apply_migration_001_timestamps(self) -> None:
+        # api_keys.created_at: INT(epoch seconds) -> DATETIME
+        if self._column_type("api_keys", "created_at") in ("int", "integer", "bigint"):
+            logger.info("Migration 001: converting api_keys.created_at to DATETIME")
+            with self._engine.begin() as conn:
+                conn.execute(text("ALTER TABLE api_keys ADD COLUMN created_dt DATETIME NULL"))
+                conn.execute(text(
+                    "UPDATE api_keys SET created_dt = FROM_UNIXTIME(created_at) "
+                    "WHERE created_at IS NOT NULL AND created_at > 0"
+                ))
+                conn.execute(text("ALTER TABLE api_keys DROP COLUMN created_at"))
+                conn.execute(text(
+                    "ALTER TABLE api_keys CHANGE COLUMN created_dt created_at DATETIME NULL"
+                ))
+
+        # request_log.created_at: BIGINT(epoch ms) -> DATETIME(3), batched
+        col_type = self._column_type("request_log", "created_at")
+        if col_type == "bigint":
+            logger.info("Migration 001: converting request_log.created_at to DATETIME(3)")
+            with self._engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE request_log ADD COLUMN created_dt DATETIME(3) NULL"
+                ))
+            # Batch the backfill so very large tables don't blow out memory
+            # or hold a single huge transaction.
+            batch = 10000
+            min_id = 0
+            total = 0
+            while True:
+                with self._engine.begin() as conn:
+                    res = conn.execute(text(
+                        "UPDATE request_log SET created_dt = FROM_UNIXTIME(created_at/1000) "
+                        "WHERE id > :min_id AND id <= :max_id "
+                        "AND created_at IS NOT NULL"
+                    ), {"min_id": min_id, "max_id": min_id + batch})
+                    n = res.rowcount or 0
+                    total += n
+                if n < batch:
+                    # Either we hit the end, or the gap is wider than batch;
+                    # bump and re-check so we don't infinite loop on sparse ids.
+                    with self._engine.connect() as conn:
+                        nxt = conn.execute(text(
+                            "SELECT MIN(id) FROM request_log "
+                            "WHERE id > :min_id AND created_dt IS NULL "
+                            "AND created_at IS NOT NULL"
+                        ), {"min_id": min_id + batch}).scalar()
+                    if nxt is None:
+                        break
+                    min_id = int(nxt) - 1
+                    continue
+                min_id += batch
+                if total % 100000 == 0:
+                    logger.info("Migration 001: %d request_log rows backfilled", total)
+            logger.info("Migration 001: %d request_log rows backfilled total", total)
+            with self._engine.begin() as conn:
+                conn.execute(text("ALTER TABLE request_log DROP COLUMN created_at"))
+                conn.execute(text(
+                    "ALTER TABLE request_log CHANGE COLUMN created_dt created_at "
+                    "DATETIME(3) NULL"
+                ))
+                conn.execute(text(
+                    "ALTER TABLE request_log ADD INDEX idx_request_log_created_at (created_at)"
+                ))
 
     # -- State --
 
@@ -272,7 +368,8 @@ class MariaDBBackend(StorageBackend):
         try:
             return [
                 {"id": row.id, "name": row.name, "key_hash": row.key_hash,
-                 "prefix": row.prefix, "created_at": row.created_at}
+                 "prefix": row.prefix,
+                 "created_at": to_iso(row.created_at) if row.created_at else None}
                 for row in session.query(ApiKeyRow).all()
             ]
         finally:
@@ -281,19 +378,26 @@ class MariaDBBackend(StorageBackend):
     def save_api_key(self, key_entry: dict) -> None:
         session = self._session()
         try:
+            created = key_entry.get("created_at")
+            if isinstance(created, str):
+                created_dt = parse_iso(created)
+            elif isinstance(created, datetime):
+                created_dt = created
+            else:
+                created_dt = None
             row = session.get(ApiKeyRow, key_entry["id"])
             if row:
                 row.name = key_entry.get("name", "")
                 row.key_hash = key_entry["key_hash"]
                 row.prefix = key_entry.get("prefix", "")
-                row.created_at = key_entry.get("created_at", 0)
+                row.created_at = created_dt
             else:
                 session.add(ApiKeyRow(
                     id=key_entry["id"],
                     name=key_entry.get("name", ""),
                     key_hash=key_entry["key_hash"],
                     prefix=key_entry.get("prefix", ""),
-                    created_at=key_entry.get("created_at", 0),
+                    created_at=created_dt,
                 ))
             session.commit()
         except Exception:
@@ -330,13 +434,20 @@ class MariaDBBackend(StorageBackend):
         # the reader does per-conversation rollups via GROUP BY.
         session = self._session()
         try:
+            created = record.get("created_at")
+            if isinstance(created, str):
+                created_dt = parse_iso(created)
+            elif isinstance(created, datetime):
+                created_dt = created
+            else:
+                created_dt = None
             row = RequestLogRow(
                 conversation_id=record.get("conversation_id"),
                 inst_id=record.get("inst_id"),
                 model=record.get("model", "") or "",
                 endpoint=record.get("endpoint", "") or "",
                 path=record.get("path", "") or "",
-                created_at=record.get("created_at"),
+                created_at=created_dt,
                 duration_ms=record.get("duration_ms"),
                 prompt_tokens=record.get("prompt_tokens"),
                 completion_tokens=record.get("completion_tokens"),
@@ -402,8 +513,8 @@ class MariaDBBackend(StorageBackend):
                 out.append({
                     "conversation_id": cid,
                     "model": model or "",
-                    "first_seen_at": int(first) if first else 0,
-                    "last_seen_at": int(last) if last else 0,
+                    "first_seen_at": to_iso(first) if first else None,
+                    "last_seen_at": to_iso(last) if last else None,
                     "turn_count": int(count),
                     "title": self._extract_title(first_row or ""),
                 })
@@ -427,7 +538,7 @@ class MariaDBBackend(StorageBackend):
                 "model": r.model,
                 "endpoint": r.endpoint,
                 "path": r.path,
-                "created_at": r.created_at,
+                "created_at": to_iso(r.created_at) if r.created_at else None,
                 "duration_ms": r.duration_ms,
                 "prompt_tokens": r.prompt_tokens,
                 "completion_tokens": r.completion_tokens,
@@ -439,12 +550,19 @@ class MariaDBBackend(StorageBackend):
         finally:
             self._session_factory.remove()
 
-    def prune_request_log(self, older_than_ms: int) -> int:
+    def prune_request_log(self, older_than) -> int:
+        if isinstance(older_than, str):
+            cutoff = parse_iso(older_than).replace(tzinfo=None)
+        elif isinstance(older_than, datetime):
+            cutoff = older_than.astimezone(timezone.utc).replace(tzinfo=None) \
+                if older_than.tzinfo else older_than
+        else:
+            raise TypeError(f"prune_request_log expects datetime or ISO str, got {type(older_than)}")
         session = self._session()
         try:
             count = (
                 session.query(RequestLogRow)
-                .filter(RequestLogRow.created_at < older_than_ms)
+                .filter(RequestLogRow.created_at < cutoff)
                 .delete(synchronize_session=False)
             )
             session.commit()

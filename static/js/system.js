@@ -435,7 +435,9 @@ async function loadHuggingFaceTokens() {
   list.innerHTML = '';
   huggingFaceTokens.forEach(token => {
     const created = token.created_at
-      ? new Date(token.created_at * 1000).toLocaleDateString()
+      ? new Date(typeof token.created_at === 'number'
+          ? token.created_at * 1000
+          : token.created_at).toLocaleDateString()
       : '';
     const item = document.createElement('div');
     item.className = 'dl-item';
@@ -522,7 +524,11 @@ async function loadApiKeys() {
     }
     list.innerHTML = '';
     keys.forEach(k => {
-      const date = new Date(k.created_at * 1000).toLocaleDateString();
+      const date = k.created_at
+        ? new Date(typeof k.created_at === 'number'
+            ? k.created_at * 1000
+            : k.created_at).toLocaleDateString()
+        : '';
       const item = document.createElement('div');
       item.className = 'dl-item';
       item.innerHTML = `

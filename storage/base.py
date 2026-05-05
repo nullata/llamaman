@@ -134,6 +134,40 @@ class StorageBackend(ABC):
         ...
 
     @abstractmethod
-    def prune_request_log(self, older_than_ms: int) -> int:
-        """Delete records with created_at < older_than_ms. Returns count pruned."""
+    def prune_request_log(self, older_than) -> int:
+        """Delete records with created_at < older_than (a datetime or ISO string).
+        Returns count pruned."""
         ...
+
+    # -- Schema migrations --
+
+    SCHEMA_VERSION_KEY = "_schema_version"
+
+    def get_schema_version(self) -> int:
+        """Read the current applied schema version from settings (0 if unset)."""
+        try:
+            v = self.get_settings().get(self.SCHEMA_VERSION_KEY, 0)
+            return int(v) if v else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def set_schema_version(self, version: int) -> None:
+        self.merge_settings({self.SCHEMA_VERSION_KEY: int(version)})
+
+    @abstractmethod
+    def migration_lock(self):
+        """Context manager preventing concurrent migration runs.
+
+        MariaDB uses a server-side advisory lock so multi-worker setups
+        serialize cleanly; the JSON backend uses a lockfile.
+        """
+        ...
+
+    def apply_migration_001_timestamps(self) -> None:
+        """Backend-specific implementation of migration 001.
+
+        Converts legacy epoch timestamps in the request_log and api_keys
+        tables (or their JSON-backend equivalents) to native datetime / ISO
+        strings. Default is a no-op so backends that don't need it can omit.
+        """
+        return None

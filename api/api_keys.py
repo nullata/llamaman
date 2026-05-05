@@ -2,11 +2,11 @@
 
 import hashlib
 import secrets
-import time
 
 from flask import Blueprint, jsonify, request, session
 
 from config import logger
+from core.timeutil import now_iso
 from storage import get_storage
 
 bp = Blueprint("api_keys", __name__)
@@ -32,7 +32,7 @@ def list_keys():
             "id": k["id"],
             "name": k.get("name", ""),
             "prefix": k.get("prefix", ""),
-            "created_at": k.get("created_at", 0),
+            "created_at": k.get("created_at"),
         })
     return jsonify(safe)
 
@@ -55,7 +55,7 @@ def create_key():
         "name": name,
         "key_hash": key_hash,
         "prefix": raw_key[:8] + "...",
-        "created_at": int(time.time()),
+        "created_at": now_iso(),
     }
     get_storage().save_api_key(entry)
     logger.info("API key created: name=%r id=%s by user=%s", name, key_id, session.get("user"))

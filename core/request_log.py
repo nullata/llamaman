@@ -23,6 +23,7 @@ import threading
 import time
 from typing import Any
 
+from core.timeutil import now_iso
 from storage import get_storage
 
 logger = logging.getLogger("llamaman")
@@ -254,7 +255,7 @@ def record_request(
             "model": model or "",
             "endpoint": endpoint,
             "path": path,
-            "created_at": int(time.time() * 1000),
+            "created_at": now_iso(),
             "request_body": req_str,
         }
         return RecordingHandle(record, mode, time.monotonic())

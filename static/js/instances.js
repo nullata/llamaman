@@ -164,7 +164,7 @@ function renderInstances() {
     card.innerHTML = `
     <div class="inst-info">
       <div class="model">${escHtml(inst.model_name)}</div>
-      <div class="meta">${portLine} &nbsp;·&nbsp; PID ${inst.pid} &nbsp;·&nbsp; ${uptime}</div>
+      <div class="meta">${portLine} &nbsp;·&nbsp; Container ${inst.container_id ? escHtml(inst.container_id.slice(0, 12)) : '-'} &nbsp;·&nbsp; ${uptime}</div>
       ${statsLine}
       ${resourceLine}
       ${queueLine}
