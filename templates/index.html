@@ -315,7 +315,7 @@
                         <span class="info-tip info-tip-wide" tabindex="0" role="button" aria-label="GPU Layers help" data-tip="Maps to llama-server --n-gpu-layers / --gpu-layers / -ngl (all three are aliases for the same flag). Sets how many transformer layers to offload onto GPU(s). -1 = 'auto' (llama.cpp's default: it estimates VRAM and picks a layer count that fits, which can be less than every layer). -2 = 'all' (force every layer onto GPU; fails if it doesn't fit). 0 disables GPU entirely and runs the whole model on CPU. Any positive value offloads exactly that many layers from the bottom of the stack and leaves the rest on CPU RAM - useful when the model is larger than your VRAM or when auto's estimate is off. This is orthogonal to Split Mode: this flag decides GPU-vs-CPU, split mode decides how the GPU-resident portion is distributed across the visible GPUs."><i class="fa-solid fa-circle-info"></i></span>
                       </span>
                       <div class="inline-field">
-                        <input id="f-gpu-layers" type="number" value="-1" min="-1" />
+                        <input id="f-gpu-layers" type="number" value="-1" min="-2" />
                         <span id="gpu-layers-total" class="text-meta"></span>
                       </div>
                       <div id="gpu-layers-suggestion" class="text-meta gpu-layers-suggestion"></div>
