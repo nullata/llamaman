@@ -199,6 +199,7 @@ Behavior notes below are terse; hover the field's info-tip in the UI for the ful
 | Setting | Default | Flag | Notes |
 |---|---|---|---|
 | **GPU Layers** | `-1` | `--n-gpu-layers` / `--gpu-layers` / `-ngl` (aliases) | `-1` = **auto** (llama.cpp estimates VRAM and picks; may leave layers on CPU). `-2` = **all** (force every layer; fails if it doesn't fit). `0` = CPU only, no GPU attached to the container. Any positive N offloads exactly N layers from the bottom |
+| **MoE CPU Layers** | `0` | `--cpu-moe` / `--n-cpu-moe` | Only meaningful on Mixture-of-Experts models. `0` = don't emit anything. `-1` = `--cpu-moe` (all layers' routed expert weights pinned to CPU). Positive N = `--n-cpu-moe N` (experts of the first N layers on CPU). Shrinks VRAM ~4-10x on big MoEs because experts dominate the weight count but only a few fire per token. Inert on dense models: llama.cpp's regex (`\.ffn_(up\|down\|gate\|gate_up)_(ch\|)exps`) matches nothing and the override is silently dropped. **Does not cover shared experts** (`_shexp` in DeepSeek-MoE / Qwen2-MoE / Hunyuan-MoE) - add an `-ot` override in Extra Args for those |
 | **GPU Devices** | *(all)* | *(container-level)* | Comma-separated host-GPU indices to attach (e.g. `0,1`). Inside the container they're renumbered from 0. Not supported on Intel Arc |
 | **Split Mode** | `layer` | `--split-mode` | `none` (single GPU, ignores Tensor Split) / `layer` (llama.cpp's default; splits whole layers) / `row` (splits tensor rows; typically only wins with fast interconnect like NVLink) |
 | **Tensor Split** | *(auto)* | `--tensor-split` | Comma-separated relative weights per container-visible GPU (e.g. `24,16`). Blank auto-fills from each GPU's total VRAM at launch. Ignored when Split Mode = `none` or only one GPU visible |
@@ -256,7 +257,7 @@ Applies to Ollama / OpenAI compat routes (`:42069`) always, and to per-instance 
 Saving a preset updates already-running instances of that model in place where possible:
 
 - **Live (no relaunch):** `idle_timeout_min`, `max_concurrent`, `max_queue_depth`, `share_queue`, all six proxy-sampling fields, all five loop-detection fields (next request picks them up)
-- **Require relaunch:** everything baked into the container at launch (gpu layers, ctx size, threads, threads-batch, cache types, flash-attn, reasoning-format, load-mode, DRY sampler, spec-decoding fields, embedding flag, mmproj/PDF fields, extra args, memory limit)
+- **Require relaunch:** everything baked into the container at launch (gpu layers, MoE CPU layers, ctx size, threads, threads-batch, cache types, flash-attn, reasoning-format, load-mode, DRY sampler, spec-decoding fields, embedding flag, mmproj/PDF fields, extra args, memory limit)
 
 **Proxy-sampling caveat:** if the instance was launched with all of `idle_timeout=0`, `max_concurrent=0`, and `override_enabled=false`, no sidecar proxy was spawned. Live-toggling `override_enabled=true` then still applies overrides on requests routed through the app's compat endpoints, but direct hits to the public port bypass it. Relaunch to spawn the proxy in that case.
 
@@ -492,6 +493,8 @@ Each node heartbeats every ~5s; a node silent past `CLUSTER_NODE_ONLINE_WINDOW_S
 
 A few settings are scoped per node because they're host-specific: tracked **Docker images** and the model-cap eviction toggles. Everything else is shared cluster-wide. Live shared-queue group aliases are advertised as selectable models in `/api/tags` and `/v1/models` (deduped cluster-wide), so a client can send the alias and have it routed to the least-loaded node serving it.
 
+**Group context length is cluster-wide.** `/api/show` and `/v1/models` report a queue group's context as the **min across all live members**, whichever node the client asks. A group with members at different ctx values advertises the smaller value so a prompt sized to it is safe for any dispatch target — the extra headroom on the bigger member simply goes unused. A node with no local member of the group still answers (`context_length` filled from the peer's runtime ctx in shared instance state, or from the preset row in the shared DB); a group with no live members anywhere still returns 404 / no entry. The instance card on the operator UI adds `ctx <min>, capped by <node/model>` when this member's ctx exceeds the advertised min, so you can see which peer is dragging the group down.
+
 > **Security:** the cluster secret lets any peer drive actions on this node. Run node-to-node traffic over a trusted network or behind TLS.
 
 ## Environment Variables
@@ -575,6 +578,7 @@ All endpoints return / accept JSON. Management endpoints need a session cookie (
 Boundary quirks worth pinning:
 
 - `n_gpu_layers`: `-1` = **auto** (llama.cpp estimates VRAM), `-2` = **all** (force every layer), `0` = CPU only (no GPU attached to the container), positive N = exactly N layers.
+- `n_cpu_moe_layers`: `0` (default) omits both MoE flags. `-1` emits `--cpu-moe` (all routed experts on CPU). Positive N emits `--n-cpu-moe N` (experts of the first N layers on CPU). Inert on dense models.
 - `threads`: when set, applies `--threads N` to llama-server **and** sets the container CPU quota to N cores.
 - `threads_batch`: null / omitted → the flag is not emitted and llama-server falls back to `--threads`.
 - `flash_attn`: legacy `true` / `false` values from pre-tri-state configs are folded on read (`true` → `"on"`, `false` → `"off"`), so no storage migration is needed.
@@ -635,6 +639,7 @@ OpenAI: `/v1/models`, `/v1/chat/completions` (chat auto-starts).
 | OpenWebUI gets 401 | `require_auth` is on (default). Create an API key and set `OPENAI_API_KEYS` in OpenWebUI |
 | Containers not cleaned up after stop | llamaMan removes containers on stop. Orphans after a crash: `docker ps --filter name=llamaman-`, or restart llamaMan (orphan adoption runs on startup) |
 | Client (Hermes / OpenWebUI / etc.) reports the trained context window instead of the preset cap | Upgrade to 1.1.2+. `/api/ps` now includes `context_length` set to the runtime ctx the instance was launched with, and `/api/show`'s `model_info["<arch>.context_length"]` is overridden with the effective cap |
+| Client asking about a queue-group name gets its own default ctx (e.g. 128k) instead of the real deployment ctx | `/api/show` and `/v1/models` now answer for a queue group on any clustered node — even one with no local member — using the peer's runtime ctx from shared state. Multi-member groups report the min across live members so the advertised value is safe for any dispatch target |
 
 ## Credits
 
