@@ -998,6 +998,25 @@ select option {
   flex-wrap: wrap;
 }
 
+/* Instance-card controls, split into two semantic groups so a narrower viewport
+   can push the read-only 'secondary' row (Logs / Stats) below the stateful
+   'primary' row (badge + Stop / Restart / Remove) - see the max-width: 820px
+   block below. On desktop both groups sit side-by-side as one continuous flex
+   line inside the card, preserving the wide-viewport density (image #2). */
+.inst-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.inst-controls-primary,
+.inst-controls-secondary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* ---- GPU VRAM bars ---- */
 .gpu-bar-row {
   display: flex;
@@ -2320,6 +2339,48 @@ body.login-page {
    body. That model has no room to breathe below ~820px, so there we
    collapse to a single column that scrolls as one natural document.
    ============================================================ */
+/* ---- Intermediate viewport: split card controls into two rows ----
+   Kicks in before the full card-stack (820px below). Reason: with a 260px
+   sidebar and the info block wanting real estate, `[info | badge | Stop |
+   Logs | Stats]` on one flex line gets cramped well before the card is
+   narrow enough to stack. Split the controls into stacked primary
+   (badge + state buttons) + secondary (Logs / Stats) sub-rows; the card
+   itself stays a flex row so `.inst-info` keeps growing on the left. */
+@media (max-width: 1080px) {
+  .inst-controls {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  /* Right-align both sub-rows: the card is still flex-row here so the
+     controls hug the card's right edge; align-items: stretch on the parent
+     makes both sub-rows the width of the widest one, so flex-end lines
+     their right edges up (badge + Stop against Logs + Stats). Without this,
+     the smaller sub-row starts flush left and looks ragged against the
+     wider one (see the reported alignment gap in image #5). */
+  .inst-controls-primary,
+  .inst-controls-secondary {
+    justify-content: flex-end;
+  }
+  /* Force badge + every button to the same width in this zone so the two
+     sub-rows produce a clean 2-column grid: [HEALTHY][Stop] above
+     [Logs][Stats] with matched column edges. Without min-width the
+     shorter "Stop" label makes column 2 narrower than the "Stats" column
+     below it (see image #6). status-badge text-align is centered so
+     "HEALTHY" sits above "Logs" instead of hugging the badge's own
+     shrunk-to-fit width. box-sizing so padding is inside the min-width. */
+  .inst-controls .btn {
+    min-width: 90px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+  .inst-controls-primary .status-badge {
+    min-width: 90px;
+    box-sizing: border-box;
+    text-align: center;
+  }
+}
+
 @media (max-width: 820px) {
   /* Scroll the whole document instead of two independent panes, and
      clamp horizontal overflow from any stray fixed-width child. */
@@ -2459,6 +2520,15 @@ body.login-page {
   }
   .inst-info {
     min-width: 0;
+  }
+
+  /* Below 820px the card itself stacks and .inst-controls spans the full
+     card width. Undo the right-align from the 1080px block so buttons
+     don't hug the right edge of a full-width row on phones - left-align
+     matches the pre-refactor mobile look. */
+  .inst-controls-primary,
+  .inst-controls-secondary {
+    justify-content: flex-start;
   }
 
   /* Segmented time-window control spans the row and splits evenly. */

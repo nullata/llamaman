@@ -297,15 +297,32 @@ function renderInstances() {
     // there's no path to it, so fall back to a read-only note.
     const nodeAttr = inst._node_id ? ` data-node="${escHtml(inst._node_id)}"` : '';
     const offlineRemote = inst._remote && inst._node_online === false;
-    const actions = offlineRemote
+    // Two semantic groups so a mid-viewport layout (see .inst-controls in CSS)
+    // can push the read-only 'secondary' row below the stateful 'primary' row
+    // (badge + stop/restart/remove) instead of letting all four items wrap
+    // arbitrarily. On wide viewports both groups sit on one flex line so
+    // desktop density is preserved. offlineRemote keeps the flat .inst-actions
+    // wrapper: no badge, no buttons - just the "peer offline" note.
+    const stopBtn = (inst.status !== 'stopped' && inst.status !== 'stopping')
+      ? `<button class="btn btn-danger btn-stop" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-stop"></i> Stop</button>`
+      : '';
+    const restartBtn = (inst.status === 'stopped' || inst.status === 'sleeping')
+      ? `<button class="btn btn-primary btn-restart" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-rotate-right"></i> Restart</button>`
+      : '';
+    const removeBtn = inst.status === 'stopped'
+      ? `<button class="btn btn-danger btn-remove" data-id="${inst.id}"${nodeAttr} title="Remove from list"><i class="fa-solid fa-trash"></i></button>`
+      : '';
+    const controls = offlineRemote
       ? `<div class="inst-actions"><span class="meta inst-remote-note"><i class="fa-solid fa-server"></i> ${escHtml(inst._node_name || 'peer node')} offline</span></div>`
-      : `<div class="inst-actions">
-      <button class="btn btn-secondary btn-logs" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-terminal"></i> Logs</button>
-      <button class="btn btn-secondary btn-stats" data-id="${inst.id}"${nodeAttr} data-model="${escHtml(inst.model_name)}"><i class="fa-solid fa-chart-line"></i> Stats</button>
-      ${inst.status !== 'stopped' && inst.status !== 'sleeping' && inst.status !== 'stopping' ? `<button class="btn btn-danger btn-stop" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-stop"></i> Stop</button>` : ''}
-      ${inst.status === 'sleeping' ? `<button class="btn btn-danger btn-stop" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-stop"></i> Stop</button>` : ''}
-      ${inst.status === 'stopped' || inst.status === 'sleeping' ? `<button class="btn btn-primary btn-restart" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-rotate-right"></i> Restart</button>` : ''}
-      ${inst.status === 'stopped' ? `<button class="btn btn-danger btn-remove" data-id="${inst.id}"${nodeAttr} title="Remove from list"><i class="fa-solid fa-trash"></i></button>` : ''}
+      : `<div class="inst-controls">
+      <div class="inst-controls-primary">
+        <span class="status-badge ${statusClass}">${inst.status}</span>
+        ${stopBtn}${restartBtn}${removeBtn}
+      </div>
+      <div class="inst-controls-secondary">
+        <button class="btn btn-secondary btn-logs" data-id="${inst.id}"${nodeAttr}><i class="fa-solid fa-terminal"></i> Logs</button>
+        <button class="btn btn-secondary btn-stats" data-id="${inst.id}"${nodeAttr} data-model="${escHtml(inst.model_name)}"><i class="fa-solid fa-chart-line"></i> Stats</button>
+      </div>
     </div>`;
 
     card.classList.toggle('instance-card-remote', !!inst._remote);
@@ -317,8 +334,7 @@ function renderInstances() {
       ${resourceLine}
       ${queueLine}
     </div>
-    <span class="status-badge ${statusClass}">${inst.status}</span>
-    ${actions}
+    ${controls}
   `;
   });
 
