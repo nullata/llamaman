@@ -208,20 +208,28 @@ class ClusterGroupAdvertiseTests(unittest.TestCase):
             self._instances.update(self._saved)
         self._tmp.cleanup()
 
-    def _add_local(self, iid, group, status="healthy", path="/models/a.gguf"):
+    def _add_local(self, iid, group, status="healthy", path="/models/a.gguf",
+                   ctx=None):
+        cfg = {"share_queue_group": group}
+        if ctx is not None:
+            cfg["ctx_size"] = ctx
         with self._instances_lock:
             self._instances[iid] = {
                 "id": iid, "model_name": "a", "model_path": path, "port": 8000,
-                "status": status, "config": {"share_queue_group": group},
+                "status": status, "config": cfg,
             }
 
-    def _add_peer(self, node_id, group, status="healthy"):
+    def _add_peer(self, node_id, group, status="healthy",
+                  path="/peer/x.gguf", ctx=None):
+        cfg = {"share_queue_group": group}
+        if ctx is not None:
+            cfg["ctx_size"] = ctx
         self.storage.register_node(
             {"node_id": node_id, "node_name": node_id, "advertise_url": "",
              "vendor": "", "llama_image": ""},
             snapshot={"instances": [{
-                "id": f"i-{node_id}", "model_name": "x", "model_path": "/peer/x.gguf",
-                "status": status, "config": {"share_queue_group": group}}]})
+                "id": f"i-{node_id}", "model_name": "x", "model_path": path,
+                "status": status, "config": cfg}]})
 
     def _groups(self):
         with patch.object(config, "CLUSTER_ENABLED", True), \
@@ -282,6 +290,275 @@ class ClusterGroupAdvertiseTests(unittest.TestCase):
         oai = llamaman._openai_group_entry(group)
         self.assertEqual(oai["id"], "qwen2.5-14b")
         self.assertEqual(oai["owned_by"], "cluster")
+
+    def test_resolve_group_to_local_model_prefers_local_representative(self):
+        """The core of the /api/show fix: an alias whose name doesn't overlap
+        the filename must still resolve to the running instance's model_path so
+        the Ollama-side model_info can carry the runtime ctx."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "chat-14b", path="/models/qwen2.5-14b-instruct-q4_k_m.gguf")
+        with patch.object(config, "CLUSTER_ENABLED", True), \
+             patch.object(config, "CLUSTER_SECRET", "s"), \
+             patch("api.llamaman.discover_models", return_value=[{
+                 "name": "qwen2.5-14b-instruct-q4_k_m",
+                 "path": "/models/qwen2.5-14b-instruct-q4_k_m.gguf",
+                 "type": "gguf", "quant": "Q4_K_M", "size_bytes": 42, "size_display": ""}]), \
+             patch("api.cluster.get_storage", return_value=self.storage), \
+             patch.object(cluster, "get_node_id", return_value="n1"):
+            resolved = llamaman._resolve_group_to_local_model("chat-14b")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved["path"], "/models/qwen2.5-14b-instruct-q4_k_m.gguf")
+
+    def test_resolve_group_to_local_model_returns_none_for_peer_only(self):
+        """A group with no local member can't have GGUF metadata read from here;
+        _resolve returns None so /api/show falls through to its 404."""
+        import api.llamaman as llamaman
+        self._add_peer("n2", "peer-only-group")
+        with patch.object(config, "CLUSTER_ENABLED", True), \
+             patch.object(config, "CLUSTER_SECRET", "s"), \
+             patch("api.cluster.get_storage", return_value=self.storage), \
+             patch.object(cluster, "get_node_id", return_value="n1"):
+            self.assertIsNone(llamaman._resolve_group_to_local_model("peer-only-group"))
+
+    def test_api_show_answers_for_queue_group_name(self):
+        """End-to-end: /api/show with the group name returns 200 and the runtime
+        ctx (32768) rather than the trained max (131072) or a 404. Regression
+        for the bug where an Ollama client couldn't detect the llamaman-declared
+        context size for a share_queue_group alias."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "chat-14b", path="/models/qwen2.5-14b.gguf")
+        with self._instances_lock:
+            self._instances["i1"]["config"] = {
+                "share_queue_group": "chat-14b", "ctx_size": 32768,
+            }
+
+        fake_meta = {"general.architecture": "qwen2",
+                     "qwen2.context_length": 131072}
+        fake_model = {"name": "qwen2.5-14b", "path": "/models/qwen2.5-14b.gguf",
+                      "type": "gguf", "quant": "", "size_bytes": 42, "size_display": ""}
+
+        app_module = __import__("app").app
+        # Bypass the before_request auth hook; we're only exercising the handler.
+        saved_before = app_module.before_request_funcs
+        app_module.before_request_funcs = {}
+        try:
+            with patch.object(config, "CLUSTER_ENABLED", True), \
+                 patch.object(config, "CLUSTER_SECRET", "s"), \
+                 patch("api.llamaman.discover_models", return_value=[fake_model]), \
+                 patch("api.llamaman._gguf_meta_for", return_value=fake_meta), \
+                 patch("api.cluster.get_storage", return_value=self.storage), \
+                 patch.object(cluster, "get_node_id", return_value="n1"):
+                with app_module.test_client() as c:
+                    r = c.post("/api/show", json={"model": "chat-14b"})
+        finally:
+            app_module.before_request_funcs = saved_before
+
+        self.assertEqual(r.status_code, 200)
+        info = r.get_json()["model_info"]
+        self.assertEqual(info["qwen2.context_length"], 32768)
+
+    # ------------------------------------------------------------------
+    # Group-ctx = min across live members (situation 2 in the design doc).
+    # Advertised ctx is safe for any dispatch target regardless of which
+    # member the shared-queue picks.
+    # ------------------------------------------------------------------
+
+    def _patch_storage(self):
+        """Point every read of get_storage() at the test JsonBackend so both
+        /api/cluster helpers AND /api/llamaman helpers (peer snapshot lookup,
+        preset fallback) see the same fixture data."""
+        return (
+            patch.object(config, "CLUSTER_ENABLED", True),
+            patch.object(config, "CLUSTER_SECRET", "s"),
+            patch("api.cluster.get_storage", return_value=self.storage),
+            patch("api.llamaman.get_storage", return_value=self.storage),
+            patch.object(cluster, "get_node_id", return_value="n1"),
+        )
+
+    def _call(self, fn, *args, **kwargs):
+        patches = self._patch_storage()
+        for p in patches:
+            p.start()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            for p in reversed(patches):
+                p.stop()
+
+    def test_group_effective_ctx_prefers_config_over_preset(self):
+        """Runtime ctx (live instance config) beats the saved preset when both
+        exist - the preset is intent, config is what actually launched."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=4096, path="/models/a.gguf")
+        self.storage.save_preset("/models/a.gguf",
+                                 {"share_queue_group": "g", "ctx_size": 8192})
+        ctx, label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 4096)
+        self.assertIn("n1", label)
+
+    def test_group_effective_ctx_falls_back_to_preset_when_snapshot_lacks_ctx(self):
+        """A peer snapshot from an older build may not include ctx_size; the
+        preset row (shared DB) is the fallback so we can still advertise a
+        real ceiling instead of skipping the member."""
+        import api.llamaman as llamaman
+        self._add_peer("n2", "g", path="/peer/x.gguf")  # no ctx in snapshot
+        self.storage.save_preset("/peer/x.gguf",
+                                 {"share_queue_group": "g", "ctx_size": 2048})
+        ctx, label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 2048)
+        self.assertIn("n2", label)
+
+    def test_group_effective_ctx_returns_none_when_no_source_has_ctx(self):
+        """No config ctx, no preset ctx: skip the member; a group with zero
+        usable members returns (None, None) and /api/show falls to 404."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", path="/models/a.gguf")  # no ctx anywhere
+        ctx, label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertIsNone(ctx)
+        self.assertIsNone(label)
+
+    def test_group_effective_ctx_min_across_mixed_local_and_peer(self):
+        """The core min rule: local ctx=32768, peer ctx=8192 -> group ctx=8192,
+        capping label names the peer that dragged it down."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=32768, path="/models/big.gguf")
+        self._add_peer("n2", "g", ctx=8192, path="/peer/small.gguf")
+        ctx, label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 8192)
+        self.assertIn("n2", label)  # capping member is the peer
+
+    def test_group_effective_ctx_excludes_stopped_members(self):
+        """Stopped/stopping members don't contribute - a former smaller-ctx
+        member shouldn't keep clamping the group after it's shut down. Mirrors
+        the existing test_stopped_members_are_not_advertised guarantee."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=4096, path="/models/a.gguf")
+        self._add_local("i2", "g", ctx=1024, path="/models/b.gguf", status="stopped")
+        ctx, _label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 4096)
+
+    def test_group_effective_ctx_min_across_all_peer_members(self):
+        """All-peer group: min still applies without any local member. Confirms
+        the peer-snapshot walk is doing real work, not just being backup for a
+        local computation."""
+        import api.llamaman as llamaman
+        self._add_peer("n2", "g", ctx=8192, path="/peer/a.gguf")
+        self._add_peer("n3", "g", ctx=16384, path="/peer/b.gguf")
+        ctx, label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 8192)
+        self.assertIn("n2", label)
+
+    def _post_api_show(self, model_name):
+        """Common /api/show POST harness: bypass the before_request auth hook
+        (we're only exercising the handler), apply storage patches, return the
+        Flask test response."""
+        app_module = __import__("app").app
+        saved_before = app_module.before_request_funcs
+        app_module.before_request_funcs = {}
+        try:
+            patches = self._patch_storage()
+            for p in patches:
+                p.start()
+            try:
+                with app_module.test_client() as c:
+                    return c.post("/api/show", json={"model": model_name})
+            finally:
+                for p in reversed(patches):
+                    p.stop()
+        finally:
+            app_module.before_request_funcs = saved_before
+
+    def test_api_show_peer_only_group_returns_200_with_min_ctx(self):
+        """No local file, group runs only on peers: /api/show returns 200 with
+        the peer's runtime ctx in model_info, plus a `capped_by` label. Fixes
+        the previous 404 that made Ollama clients over-allocate the trained
+        max on peer-only groups."""
+        self._add_peer("n2", "peer-group", ctx=32768, path="/peer/x.gguf")
+        r = self._post_api_show("peer-group")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        info = body["model_info"]
+        arch = info["general.architecture"]
+        self.assertEqual(info[f"{arch}.context_length"], 32768)
+        self.assertTrue(body["modelfile"].startswith("FROM cluster:"))
+        self.assertIn("n2", body["capped_by"])
+
+    def test_api_show_local_group_member_advertises_min_when_peer_is_smaller(self):
+        """Local qwen at ctx=32768 in group g, peer at ctx=8192 in group g.
+        /api/show for the group name resolves to the local rep (via
+        _resolve_group_to_local_model) but the reported ctx must be the peer's
+        smaller value so a prompt sized to it fits any dispatch target."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=32768, path="/models/qwen.gguf")
+        self._add_peer("n2", "g", ctx=8192, path="/peer/small.gguf")
+        fake_model = {"name": "qwen", "path": "/models/qwen.gguf",
+                      "type": "gguf", "quant": "", "size_bytes": 42, "size_display": ""}
+        fake_meta = {"general.architecture": "qwen2",
+                     "qwen2.context_length": 131072}
+        with patch("api.llamaman.discover_models", return_value=[fake_model]), \
+             patch("api.llamaman._gguf_meta_for", return_value=fake_meta):
+            r = self._post_api_show("g")
+        self.assertEqual(r.status_code, 200)
+        info = r.get_json()["model_info"]
+        self.assertEqual(info["qwen2.context_length"], 8192)
+
+    def test_api_show_local_model_by_file_name_also_reports_group_min(self):
+        """Same fixture, called by the LOCAL file's name instead of the group
+        name. Guards the 'both address routes agree' invariant: file-name and
+        group-name /api/show must return the same ctx or clients would see a
+        ceiling that depends on which id they happened to send."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=32768, path="/models/qwen.gguf")
+        self._add_peer("n2", "g", ctx=8192, path="/peer/small.gguf")
+        fake_model = {"name": "qwen", "path": "/models/qwen.gguf",
+                      "type": "gguf", "quant": "", "size_bytes": 42, "size_display": ""}
+        fake_meta = {"general.architecture": "qwen2",
+                     "qwen2.context_length": 131072}
+        with patch("api.llamaman.discover_models", return_value=[fake_model]), \
+             patch("api.llamaman._gguf_meta_for", return_value=fake_meta):
+            r = self._post_api_show("qwen")
+        self.assertEqual(r.status_code, 200)
+        info = r.get_json()["model_info"]
+        self.assertEqual(info["qwen2.context_length"], 8192)
+
+    def test_api_show_still_404s_when_group_has_no_live_members(self):
+        """Regression guard: the new peer-only branch must NOT swallow genuine
+        misses. A name that matches no file AND no live group member still
+        returns 404 as before."""
+        r = self._post_api_show("no-such-thing")
+        self.assertEqual(r.status_code, 404)
+
+    def test_openai_group_entry_reports_min_ctx_for_peer_only_group(self):
+        """OpenAI clients discover ctx from /v1/models entries via the
+        non-standard context_length / max_model_len fields (OpenRouter / vLLM
+        convention). For a peer-only group the local node has no file, so the
+        entry must fill those from the group's shared-storage min - otherwise
+        a client falls back to its own built-in default (e.g. 128k) and
+        over-allocates against a smaller real deployment (regression: harness
+        saw 128k for a 64k deployment)."""
+        import api.llamaman as llamaman
+        self._add_peer("n2", "my-group-1", ctx=65536, path="/peer/qwen.gguf")
+        entry = self._call(llamaman._openai_group_entry,
+                           {"name": "my-group-1", "path": None})
+        self.assertEqual(entry["context_length"], 65536)
+        self.assertEqual(entry["max_model_len"], 65536)
+        self.assertEqual(entry["owned_by"], "cluster")
+
+    def test_group_effective_ctx_safe_to_call_holding_instances_lock(self):
+        """Regression guard for a silent-deadlock bug: _public_instance calls
+        _group_effective_ctx, and _public_instance itself runs INSIDE the
+        instances_lock at three sites (heartbeat build, GET /api/instances,
+        GET /api/instances/<id>). If _group_effective_ctx re-acquires the same
+        non-reentrant Lock it hangs the worker forever with no traceback -
+        the exact 'node goes offline, tab spins forever, no errors' symptom.
+        This test holds the lock and calls the helper; if it deadlocks, unittest
+        times out instead of returning green."""
+        import api.llamaman as llamaman
+        self._add_local("i1", "g", ctx=4096, path="/models/a.gguf")
+        self._add_peer("n2", "g", ctx=8192, path="/peer/x.gguf")
+        with self._instances_lock:
+            ctx, _label = self._call(llamaman._group_effective_ctx, "g")
+        self.assertEqual(ctx, 4096)
 
 
 class NodeScopedStateTests(unittest.TestCase):

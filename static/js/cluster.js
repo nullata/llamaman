@@ -329,8 +329,17 @@ function instanceNodeBadge(inst) {
 // on an instance (independent of cluster mode - share_queue groups instances on
 // the same node too), so operators can see at a glance which instances pool
 // together. Empty / unset group => no badge.
+//
+// When the server reports a queue_group_summary (this member's ctx exceeds the
+// group's advertised min), the badge appends the min and the capping member so
+// operators see at a glance that this instance's extra ctx headroom is unused.
 function instanceQueueGroupBadge(inst) {
   const group = (inst.config && inst.config.share_queue_group) || '';
   if (!group) return '';
+  const summary = inst.queue_group_summary;
+  if (summary && summary.ctx && summary.capped_by) {
+    const title = `Queue group '${group}' effective ctx = ${summary.ctx} (capped by ${summary.capped_by})`;
+    return ` <span class="node-badge" title="${escHtml(title)}"><i class="fa-solid fa-layer-group"></i> ${escHtml(group)} <span class="muted">· ctx ${summary.ctx}, capped by ${escHtml(summary.capped_by)}</span></span>`;
+  }
   return ` <span class="node-badge" title="Queue group"><i class="fa-solid fa-layer-group"></i> ${escHtml(group)}</span>`;
 }

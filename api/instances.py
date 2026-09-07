@@ -76,6 +76,30 @@ def _public_instance(inst: dict) -> dict:
             "max_concurrent": gate.max_concurrent,
             "max_queue_depth": gate.max_queue_depth,
         }
+    # Queue-group ctx summary: when this instance is in a share_queue_group AND
+    # some other live member of that group has a smaller ctx, this instance's
+    # extra headroom is unused - the group advertises the min so a client sizing
+    # to it will fit any dispatch target. Surface that on the instance card so
+    # the operator sees which peer is capping the group. Absent when there's no
+    # group, no capping (this instance IS the min), or nothing to compare against.
+    group = ((inst.get("config") or {}).get("share_queue_group") or "").strip()
+    own_ctx_raw = (inst.get("config") or {}).get("ctx_size")
+    try:
+        own_ctx = int(own_ctx_raw) if own_ctx_raw else 0
+    except (TypeError, ValueError):
+        own_ctx = 0
+    if group and own_ctx > 0:
+        try:
+            from api.llamaman import _group_effective_ctx
+            group_min, capped_by = _group_effective_ctx(group)
+        except Exception:
+            group_min, capped_by = None, None
+        if group_min and group_min < own_ctx and capped_by:
+            d["queue_group_summary"] = {
+                "group": group,
+                "ctx": group_min,
+                "capped_by": capped_by,
+            }
     return d
 
 

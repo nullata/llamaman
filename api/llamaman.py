@@ -103,6 +103,170 @@ def _find_model_by_name(name: str) -> dict | None:
     return None
 
 
+def _resolve_group_to_local_model(name: str) -> dict | None:
+    """When `name` is a cluster share_queue_group alias whose group has a member
+    running on THIS node, return a `discover_models`-shape dict for that local
+    representative file. Returns None when no such group exists or when the
+    group runs only on peers (their GGUF isn't readable from here).
+
+    This is what lets /api/show answer for a queue-group name that a client
+    picked out of /api/tags: without it, _find_model_by_name would 404 because
+    the alias doesn't overlap the filename (which is the whole point of an
+    alias - pooling cross-quant/cross-name files under one clean name), and the
+    Ollama client would fall back to the trained max instead of the runtime
+    ctx llamaman is actually serving."""
+    from api.cluster import cluster_group_models
+    req = name.split(":")[0].lower()
+    try:
+        groups = cluster_group_models()
+    except Exception:
+        return None
+    for g in groups:
+        if (g.get("name") or "").lower() != req:
+            continue
+        path = g.get("path")
+        if not path:
+            return None  # peer-only group; no local file to read metadata from
+        # Prefer the exact discover_models entry (carries `type`, `quant`, etc.)
+        # so downstream helpers see the same shape they get from _find_model_by_name.
+        try:
+            real = os.path.realpath(path)
+        except OSError:
+            real = path
+        for m in discover_models(MODELS_DIR):
+            mp = m.get("path")
+            if not mp:
+                continue
+            if mp == path or os.path.realpath(mp) == real:
+                return m
+        # Fallback: build a minimal entry so /api/show can still respond.
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = 0
+        return {"name": Path(path).stem, "path": path, "type": "gguf",
+                "quant": "", "size_bytes": size, "size_display": ""}
+    return None
+
+
+def _iter_group_members_across_cluster(name: str):
+    """Yield every live (non-stopped/-stopping) instance in the cluster whose
+    share_queue_group matches `name`, drawing from local instance state AND every
+    peer's snapshot in the shared registry. Same data sources cluster_group_models
+    uses, but per-member instead of dedup'd - callers can inspect each member's
+    ctx / origin / node.
+
+    Yields dicts of shape:
+        {source, node_id, node_name, model_path, config, status, instance_id}
+
+    Falls back silently on any storage/read error so a peer outage never breaks
+    /api/show or the badge; the caller sees fewer members, not an exception.
+    """
+    from core import cluster as cl
+    req = name.split(":")[0].lower()
+
+    # Snapshot without instances_lock: this helper is transitively called from
+    # _public_instance, and _public_instance itself is invoked by callers that
+    # already hold instances_lock (heartbeat build_local_snapshot, GET
+    # /api/instances, GET /api/instances/<id>). Re-acquiring a non-reentrant
+    # Lock from the same thread deadlocks silently - no traceback, just a
+    # frozen worker. dict.copy() is atomic under the GIL, which is what we
+    # need: a stable value list to iterate; a concurrent add/remove that
+    # sneaks in between the snapshot and the read just means we're one
+    # heartbeat stale, which the min-ctx computation tolerates.
+    local_snapshot = list(instances.copy().values())
+    self_id = cl.get_node_id()
+    for inst in local_snapshot:
+        alias = ((inst.get("config") or {}).get("share_queue_group") or "").strip()
+        if not alias or alias.lower() != req:
+            continue
+        if inst.get("status") in ("stopped", "stopping"):
+            continue
+        yield {
+            "source": "local",
+            "node_id": self_id,
+            "node_name": self_id,
+            "model_path": inst.get("model_path", ""),
+            "config": inst.get("config") or {},
+            "status": inst.get("status") or "",
+            "instance_id": inst.get("id", ""),
+        }
+
+    try:
+        nodes = get_storage().list_nodes() or []
+    except Exception:
+        nodes = []
+    for node in nodes:
+        node_id = node.get("node_id")
+        if not node_id or node_id == self_id:
+            continue
+        snapshot = node.get("snapshot") or {}
+        for inst in snapshot.get("instances") or []:
+            alias = ((inst.get("config") or {}).get("share_queue_group") or "").strip()
+            if not alias or alias.lower() != req:
+                continue
+            if inst.get("status") in ("stopped", "stopping"):
+                continue
+            yield {
+                "source": "peer",
+                "node_id": node_id,
+                "node_name": node.get("node_name") or node_id,
+                "model_path": inst.get("model_path", ""),
+                "config": inst.get("config") or {},
+                "status": inst.get("status") or "",
+                "instance_id": inst.get("id", ""),
+            }
+
+
+def _group_effective_ctx(name: str) -> tuple[int | None, str | None]:
+    """Return (min_ctx_across_live_members, capping_member_label) for a group,
+    or (None, None) when no member has a usable ctx.
+
+    Per member, prefer the live config's ctx (the runtime value that was
+    actually applied) over the preset row (the last-saved intent). A member
+    whose ctx we can't determine at all is silently skipped - undercounting
+    is safer than fabricating a 0 that would clamp the group to nothing.
+
+    The min rule is what makes the advertised ctx safe for any dispatch target:
+    a client sizing a prompt to it will fit regardless of which member the
+    shared-queue dispatcher picks."""
+    best_ctx: int | None = None
+    best_label: str | None = None
+    for m in _iter_group_members_across_cluster(name):
+        ctx = None
+        cfg_ctx = (m["config"] or {}).get("ctx_size")
+        try:
+            if cfg_ctx:
+                ctx = int(cfg_ctx)
+        except (TypeError, ValueError):
+            ctx = None
+        if ctx is None and m["model_path"]:
+            try:
+                preset = get_storage().get_preset(m["model_path"]) or {}
+            except Exception:
+                preset = {}
+            try:
+                pctx = preset.get("ctx_size")
+                if pctx:
+                    ctx = int(pctx)
+            except (TypeError, ValueError):
+                ctx = None
+        if ctx is None or ctx <= 0:
+            continue
+        if best_ctx is None or ctx < best_ctx:
+            best_ctx = ctx
+            stem = model_name_from_path(m["model_path"]) if m["model_path"] else "?"
+            best_label = f"{m['node_name']}/{stem}"
+    return best_ctx, best_label
+
+
+def _details_from_peer_group_member(name: str) -> dict:
+    """Ollama `details` block for a group whose members live only on peers.
+    Same shape as _group_min_details today; extracted so a later patch can
+    enrich it from a peer's snapshotted GGUF metadata without another rewrite."""
+    return _group_min_details(name)
+
+
 def _find_running_instance_by_alias(name: str) -> dict | None:
     """Find a running instance that opted into the cluster alias `name`.
 
@@ -1189,33 +1353,55 @@ def llamaman_version():
 def _effective_ctx_for_model(model_path: str, gguf_meta: dict) -> int:
     """Resolve the context size a client would actually get for this model:
     a running instance's runtime ctx wins, then the saved preset, then the
-    model's trained context_length from GGUF metadata."""
+    model's trained context_length from GGUF metadata. When the model is a
+    member of a cluster share_queue_group, the group-wide min caps the result
+    so /api/show by file-name and by group-name agree on one safe number."""
+    base = 0
+    group_name = ""
     with instances_lock:
         for inst in instances.values():
             if inst.get("model_path") != model_path:
                 continue
-            if inst.get("status") in ("stopped",):
+            if inst.get("status") in ("stopped", "stopping"):
                 continue
-            ctx = (inst.get("config") or {}).get("ctx_size")
+            cfg = inst.get("config") or {}
+            if not group_name:
+                group_name = (cfg.get("share_queue_group") or "").strip()
+            if not base:
+                ctx = cfg.get("ctx_size")
+                if ctx:
+                    try:
+                        base = int(ctx)
+                    except (TypeError, ValueError):
+                        pass
+            if base and group_name:
+                break
+    if not base or not group_name:
+        try:
+            preset = get_storage().get_preset(model_path) or {}
+        except Exception:
+            preset = {}
+        if not group_name:
+            group_name = (preset.get("share_queue_group") or "").strip()
+        if not base:
+            ctx = preset.get("ctx_size")
             if ctx:
                 try:
-                    return int(ctx)
+                    base = int(ctx)
                 except (TypeError, ValueError):
                     pass
-    preset = get_storage().get_preset(model_path) or {}
-    ctx = preset.get("ctx_size")
-    if ctx:
-        try:
-            return int(ctx)
-        except (TypeError, ValueError):
-            pass
-    arch = (gguf_meta.get("general.architecture") or "").strip()
-    if arch:
-        try:
-            return int(gguf_meta.get(f"{arch}.context_length") or 0)
-        except (TypeError, ValueError):
-            pass
-    return 0
+    if not base:
+        arch = (gguf_meta.get("general.architecture") or "").strip()
+        if arch:
+            try:
+                base = int(gguf_meta.get(f"{arch}.context_length") or 0)
+            except (TypeError, ValueError):
+                pass
+    if group_name:
+        group_min, _label = _group_effective_ctx(group_name)
+        if group_min:
+            return min(base, group_min) if base else group_min
+    return base
 
 
 @bp.route("/api/show", methods=["POST"])
@@ -1224,6 +1410,36 @@ def llamaman_show():
     model_name = body.get("model", body.get("name", "")).strip()
     model = _find_model_by_name(model_name)
     if model is None:
+        # Fall back to cluster share_queue_group alias: a client that picked the
+        # group's name out of /api/tags will hit this path, and _find_model_by_name
+        # only matches filenames/pretty-name aliases.
+        model = _resolve_group_to_local_model(model_name)
+    if model is None:
+        # Peer-only group: no local file to read GGUF from, but the peer's
+        # instance state (via cluster snapshot) or the preset row (shared DB)
+        # still tells us the runtime ctx. Serve a degraded response with the
+        # min-ctx across live members instead of 404'ing; only the GGUF-derived
+        # polish fields (arch/param count/template) come back blank.
+        group_min, capping_label = _group_effective_ctx(model_name)
+        if group_min:
+            details = _details_from_peer_group_member(model_name)
+            arch = details["family"]
+            model_info = {
+                "general.architecture": arch,
+                f"{arch}.context_length": group_min,
+            }
+            return jsonify({
+                # "cluster:" prefix (never a peer's real path) so a client that
+                # tries to reopen the path can't be misled into thinking it's a
+                # local file. Non-standard but harmless - clients read `template`
+                # and `model_info`, not the modelfile string itself.
+                "modelfile": f"FROM cluster:{model_name}",
+                "parameters": "",
+                "template": "",
+                "details": details,
+                "model_info": model_info,
+                "capped_by": capping_label,
+            })
         return jsonify({"error": f"model '{model_name}' not found"}), 404
 
     entry = _llamaman_model_entry(model)
@@ -1292,8 +1508,13 @@ def _openai_model_entry(m: dict) -> dict:
 
 def _openai_group_entry(group: dict) -> dict:
     """/v1/models entry for a cluster share-queue alias. `owned_by` is "cluster"
-    to distinguish it from a node-local file; the effective context is only
-    filled in when a member runs on this node (a peer's GGUF isn't readable)."""
+    to distinguish it from a node-local file. Effective context comes from the
+    local rep's file+overrides when a member runs on this node; otherwise it
+    comes from the group-wide min across live members in shared storage (peer
+    snapshot + preset), so an OpenAI client hitting a node with no local
+    member still sees the truthful runtime cap instead of falling back to its
+    own default (a client with a 128k built-in guess otherwise silently
+    over-allocates against a 64k deployment)."""
     name = group["name"]
     path = group.get("path")
     has_local = bool(path) and Path(path).exists()
@@ -1305,9 +1526,12 @@ def _openai_group_entry(group: dict) -> dict:
     }
     if has_local:
         ctx = _effective_ctx_for_model(path, _gguf_meta_for(path, "gguf"))
-        if ctx > 0:
-            entry["context_length"] = ctx
-            entry["max_model_len"] = ctx
+    else:
+        ctx, _label = _group_effective_ctx(name)
+        ctx = ctx or 0
+    if ctx and ctx > 0:
+        entry["context_length"] = ctx
+        entry["max_model_len"] = ctx
     return entry
 
 
