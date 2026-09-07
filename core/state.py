@@ -6,9 +6,12 @@ import time
 import uuid
 from pathlib import Path
 
-from config import LLAMA_CONTAINER_PREFIX, logger
+import os
+
+from config import LLAMA_CONTAINER_PREFIX, LOGS_DIR, logger
 from core.helpers import (
-    get_docker_client, is_container_running, resolve_llama_endpoint, stop_container,
+    get_docker_client, is_container_running, resolve_llama_endpoint,
+    start_container_log_relay, stop_container,
 )
 
 
@@ -169,6 +172,11 @@ def adopt_orphans() -> int:
 
         container_name = container.name
         adopt_host, adopt_port = resolve_llama_endpoint(container_name, port)
+        # Mint a log path so the /logs endpoints have a file to read; the
+        # relay below appends to it. Adopted orphans were launched outside
+        # this process (either by a llamaman we no longer are or by a hand
+        # `docker run` matching our label), so there is no prior file.
+        adopt_log_file = os.path.join(LOGS_DIR, f"{inst_id}.log")
         inst = {
             "id": inst_id,
             "model_name": Path(model_path).name,
@@ -177,7 +185,7 @@ def adopt_orphans() -> int:
             "status": "starting",  # poller will verify and flip to healthy
             "container_id": cid,
             "container_name": container_name,
-            "log_file": "",
+            "log_file": adopt_log_file,
             "config": orphan_config,
             "started_at": time.time(),
             "_server_host": adopt_host,
@@ -195,6 +203,13 @@ def adopt_orphans() -> int:
             instances[inst_id] = inst
             tracked_ids.add(cid)
             active_ports.add(port)
+
+        # Log relay: this process never spawned the container's launch-time
+        # relay (that only runs inside _run_container), so without this the
+        # /logs and /logs/stream endpoints would return nothing for adopted
+        # instances. follow_from_now avoids replaying the container's
+        # historical output into a fresh file.
+        start_container_log_relay(cid, adopt_log_file, follow_from_now=True)
 
         logger.info(
             "Adopted orphan container %s port %d model %s%s",
@@ -335,6 +350,20 @@ def load_state():
                         config.get("max_queue_depth", 200),
                         model_path=inst["model_path"],
                         share_queue=config.get("share_queue", False))
+
+        # Log relay: the daemon thread the previous llamaman process spawned
+        # died with that process, so /logs would return only stale content
+        # (up to the restart) and /logs/stream would hang without new lines
+        # while the container is still writing to docker. Rebuild it here
+        # for the reattached-running case. follow_from_now prevents replaying
+        # historical output that's already in the file. Mint a path if the
+        # saved row didn't carry one (older rows, or an adopted-then-saved
+        # instance from before the adopt path minted paths).
+        if restored_status == "starting" and saved_container_id:
+            if not inst["log_file"]:
+                inst["log_file"] = os.path.join(LOGS_DIR, f"{inst['id']}.log")
+            start_container_log_relay(saved_container_id, inst["log_file"],
+                                      follow_from_now=True)
 
     for entry in saved_downloads:
         status = entry.get("status", "failed")

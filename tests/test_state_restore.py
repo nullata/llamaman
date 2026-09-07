@@ -201,6 +201,50 @@ class ReattachedInstanceRebuildTests(unittest.TestCase):
         self.assertIsNotNone(gate)
         self.assertEqual(gate.max_concurrent, 4)
 
+    def test_reattach_starts_log_relay_with_follow_from_now(self):
+        """After a llamaman restart, the reattach path must respawn the
+        container-log relay daemon - the previous one died with the previous
+        process, so /logs would return only stale content and /logs/stream
+        would hang without new lines while the container is still writing.
+        follow_from_now=True prevents replaying historical output already in
+        the file. Regression guard for the missing relay-restart in load_state."""
+        seed = _saved_instance(status="healthy", max_concurrent=3)
+        seed["log_file"] = os.path.join(self._tmp.name, "i1.log")
+        with patch("core.state.start_container_log_relay") as mock_relay:
+            self._run_load_state([seed])
+        mock_relay.assert_called_once()
+        args, kwargs = mock_relay.call_args
+        self.assertEqual(args[0], "cid-i1")  # container id passed through
+        self.assertEqual(args[1], seed["log_file"])
+        self.assertTrue(kwargs.get("follow_from_now"))
+
+    def test_reattach_mints_log_path_when_saved_row_lacks_one(self):
+        """Older state rows (or an adopted-then-saved instance from before
+        the adopt path minted paths) have log_file="". Reattach must mint a
+        LOGS_DIR/<inst_id>.log path so the /logs endpoints have something to
+        read, instead of leaving the empty string that would break
+        read_log_file / stream_log_file."""
+        seed = _saved_instance(status="healthy", max_concurrent=0,
+                               idle_timeout_min=0,
+                               proxy_sampling_override_enabled=False)
+        seed["log_file"] = ""
+        with patch("core.state.start_container_log_relay") as mock_relay:
+            self._run_load_state([seed])
+        self.assertTrue(instances["i1"]["log_file"])
+        self.assertTrue(instances["i1"]["log_file"].endswith("i1.log"))
+        # Relay is still spawned with the minted path.
+        args, _kwargs = mock_relay.call_args
+        self.assertEqual(args[1], instances["i1"]["log_file"])
+
+    def test_stopped_instance_does_not_start_log_relay(self):
+        """A stopped instance stays stopped on restore; no container to tail,
+        no relay to start. Guards against the reattach branch's log-relay
+        call firing when it shouldn't."""
+        seed = _saved_instance(status="stopped", max_concurrent=3)
+        with patch("core.state.start_container_log_relay") as mock_relay:
+            self._run_load_state([seed])
+        mock_relay.assert_not_called()
+
     def test_share_queue_reattach_reuses_shared_gate(self):
         # Two share_queue peers of the same model must share ONE gate object
         # after restore, same invariant the launch path enforces via

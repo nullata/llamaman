@@ -418,6 +418,59 @@ def stream_log_file(log_file):
         return
 
 
+def start_container_log_relay(container_id: str, log_file: str,
+                              follow_from_now: bool = False):
+    """Spawn a daemon thread that copies container.logs into log_file.
+
+    Mirrors api.instances._start_log_relay (which runs at launch time and
+    holds the container object) for the reattach / adopt paths, where all
+    we have is a container id and the file may or may not already exist.
+
+    follow_from_now=True passes since=int(time.time()) to container.logs so
+    we don't replay the container's historical output - it's either already
+    in the file (reattach after a llamaman restart) or would flood a fresh
+    file (adopted orphan we never launched ourselves). A marker line is
+    written first so operators can see where the resumed relay picks up.
+
+    Returns the started thread, or None if the container can't be fetched.
+    """
+    import threading
+    from datetime import datetime, timezone
+
+    try:
+        client = get_docker_client()
+        container = client.containers.get(container_id)
+    except Exception:
+        return None
+
+    since = int(time.time()) if follow_from_now else None
+    marker = None
+    if follow_from_now:
+        marker = f"--- llamaman resumed log at {datetime.now(timezone.utc).isoformat()} ---\n"
+
+    def _relay():
+        try:
+            with open(log_file, "a") as fh:
+                if marker:
+                    fh.write(marker)
+                    fh.flush()
+                kwargs = {"stream": True, "follow": True}
+                if since is not None:
+                    kwargs["since"] = since
+                for chunk in container.logs(**kwargs):
+                    try:
+                        fh.write(chunk.decode("utf-8", errors="replace"))
+                        fh.flush()
+                    except Exception:
+                        break
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_relay, daemon=True)
+    t.start()
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Docker helpers
 # ---------------------------------------------------------------------------
