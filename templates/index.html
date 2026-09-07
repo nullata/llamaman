@@ -322,6 +322,13 @@
                     </div>
                     <div class="form-group">
                       <span class="label-row">
+                        <label for="f-n-cpu-moe">MoE CPU Layers (0 off, -1 all, N = first N)</label>
+                        <span class="info-tip info-tip-wide" tabindex="0" role="button" aria-label="MoE CPU Layers help" data-tip="Only meaningful on Mixture-of-Experts models (Mixtral, Qwen-MoE, DeepSeek-MoE, Llama-4, gpt-oss, Kimi-K2, etc.). Keeps the routed-expert FFN weights on CPU while attention, embeddings, output projection and the KV cache stay wherever GPU Layers put them — shrinks VRAM dramatically because experts dominate the weight count but only a few fire per token. Sentinel: 0 = don't emit anything (default, no MoE flag); -1 = --cpu-moe (ALL layers' experts on CPU); positive N = --n-cpu-moe N (experts of the first N layers on CPU, the rest on GPU — the tuning knob for partial offload). Matches llama.cpp's LLM_FFN_EXPS_REGEX so it targets tensors named .ffn_(up|down|gate|gate_up)_(ch|)exps only; shared experts named _shexp are NOT covered — add an -ot override in Extra Args for those. On a dense (non-MoE) model this field is inert: the regex matches nothing, llama.cpp silently ignores the override."><i class="fa-solid fa-circle-info"></i></span>
+                      </span>
+                      <input id="f-n-cpu-moe" type="number" value="0" min="-1" />
+                    </div>
+                    <div class="form-group">
+                      <span class="label-row">
                         <label for="f-gpu-devices">GPU Devices (optional)</label>
                         <span class="info-tip info-tip-wide" tabindex="0" role="button" aria-label="GPU Devices help" data-tip="Comma-separated host-GPU indices to attach to this instance's container (e.g. '0' or '0,1' or '2,4'). Blank exposes every GPU visible to the Docker daemon. NVIDIA uses Docker device_requests; AMD (ROCm) sets ROCR_VISIBLE_DEVICES on top of a full /dev/kfd + /dev/dri mount. Inside the container the exposed GPUs are renumbered starting at 0, which is what llama.cpp actually sees, so Tensor Split values are indexed against the exposed set, not the host indices. Silently ignored on Intel today - per-instance SYCL device filtering isn't wired up."><i class="fa-solid fa-circle-info"></i></span>
                       </span>

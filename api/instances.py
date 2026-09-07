@@ -90,6 +90,7 @@ def _merge_preset_into_config(model_path: str, config: dict) -> dict:
     if preset:
         for key in (
             "n_gpu_layers",
+            "n_cpu_moe_layers",
             "ctx_size",
             "threads",
             "threads_batch",
@@ -498,7 +499,8 @@ def relaunch_sleeping_instance(inst_id: str) -> bool:
     return relaunch_inactive_instance(inst_id)
 
 
-def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
+def launch_instance(model_path, port, n_gpu_layers=-1, n_cpu_moe_layers=0,
+                    ctx_size=4096,
                     threads=None, threads_batch=None,
                     memory_limit=None, parallel=None, extra_args="",
                     spec_enabled=False, spec_type=DEFAULT_SPEC_TYPE,
@@ -566,6 +568,10 @@ def launch_instance(model_path, port, n_gpu_layers=-1, ctx_size=4096,
 
     config = {
         "n_gpu_layers": n_gpu_layers,
+        # MoE expert-offload sentinel. 0 = don't emit anything; -1 = --cpu-moe
+        # (all experts on CPU); N>0 = --n-cpu-moe N (experts of first N layers
+        # on CPU). Inert on dense models. See build_llama_cmd.
+        "n_cpu_moe_layers": int(n_cpu_moe_layers or 0),
         "ctx_size": ctx_size,
         "threads": threads,
         # --threads-batch overrides the batch/prefill thread count when set;
@@ -1064,6 +1070,7 @@ def api_instances_create():
         model_path=model_path,
         port=int(body.get("port", 8000)),
         n_gpu_layers=int(body.get("n_gpu_layers", -1)),
+        n_cpu_moe_layers=int(body.get("n_cpu_moe_layers", 0) or 0),
         ctx_size=ctx_size,
         threads=body.get("threads"),
         threads_batch=body.get("threads_batch"),
@@ -1164,6 +1171,7 @@ def api_instances_restart(inst_id):
         model_path=model_path,
         port=port,
         n_gpu_layers=config.get("n_gpu_layers", -1),
+        n_cpu_moe_layers=int(config.get("n_cpu_moe_layers", 0) or 0),
         ctx_size=config.get("ctx_size", 4096),
         threads=config.get("threads"),
         threads_batch=config.get("threads_batch"),

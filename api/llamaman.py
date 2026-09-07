@@ -384,6 +384,7 @@ def _ensure_model_running(
             model_path=model["path"],
             port=port,
             n_gpu_layers=preset.get("n_gpu_layers", -1),
+            n_cpu_moe_layers=int(preset.get("n_cpu_moe_layers", 0) or 0),
             ctx_size=preset.get("ctx_size", 4096),
             threads=preset.get("threads"),
             memory_limit=preset.get("memory_limit") or None,

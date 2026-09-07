@@ -25,7 +25,8 @@ PRETTY_NAME_MAX_LEN = 100
 # number of GPUs with different VRAM sizes, so hard-coding one tensor_split
 # vector cluster-wide would be wrong on any node whose layout differs.
 PRESET_HARDWARE_KEYS = (
-    "n_gpu_layers", "threads", "threads_batch", "memory_limit", "gpu_devices",
+    "n_gpu_layers", "n_cpu_moe_layers", "threads", "threads_batch",
+    "memory_limit", "gpu_devices",
     "parallel", "split_mode", "tensor_split",
 )
 
@@ -163,6 +164,10 @@ def api_preset_save(model_path):
     share_queue_on = bool(body.get("share_queue", False))
     data = {
         "n_gpu_layers": body.get("n_gpu_layers", -1),
+        # MoE expert offload sentinel (0 off, -1 all, N>0 first N layers).
+        # Per-node hardware because it scales with the node's VRAM, same tier
+        # as n_gpu_layers.
+        "n_cpu_moe_layers": int(body.get("n_cpu_moe_layers", 0) or 0),
         "ctx_size": ctx_size,
         "threads": body.get("threads"),
         # threads_batch is per-node hardware like threads (CPU-core count

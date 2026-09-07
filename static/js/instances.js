@@ -766,6 +766,7 @@ function readLaunchForm() {
 
   const body = {
     n_gpu_layers: parseInt(document.getElementById('f-gpu-layers').value),
+    n_cpu_moe_layers: parseInt(document.getElementById('f-n-cpu-moe')?.value) || 0,
     ctx_size: ctxSize,
     extra_args: document.getElementById('f-extra').value.trim(),
     gpu_devices: document.getElementById('f-gpu-devices').value.trim(),

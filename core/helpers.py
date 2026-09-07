@@ -159,6 +159,16 @@ def build_llama_cmd(model_path: str, port: int, config: dict) -> list[str]:
         "--n-gpu-layers", str(config.get("n_gpu_layers", -1)),
         "--ctx-size", str(config.get("ctx_size", 4096)),
     ]
+    # MoE expert offload to CPU. Sentinel int (0 off, -1 all-on-CPU, N>0 = first
+    # N layers). -1 emits --cpu-moe (blanket regex override for every layer's
+    # expert-FFN tensors); N>0 emits --n-cpu-moe N (per-layer overrides for the
+    # first N layers only). Inert on dense models: llama.cpp silently ignores
+    # tensor_buft_overrides whose regex matches no tensor.
+    n_cpu_moe = int(config.get("n_cpu_moe_layers", 0) or 0)
+    if n_cpu_moe == -1:
+        cmd += ["--cpu-moe"]
+    elif n_cpu_moe > 0:
+        cmd += ["--n-cpu-moe", str(n_cpu_moe)]
     if config.get("threads"):
         cmd += ["--threads", str(int(config["threads"]))]
     # --threads-batch controls the CPU threads used during batch/prompt

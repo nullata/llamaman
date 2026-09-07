@@ -636,6 +636,9 @@ function applyPresetHardwareForNode(p, nodeId) {
   const val = (k) => (ov[k] !== undefined && ov[k] !== null) ? ov[k] : p[k];
   const layers = val('n_gpu_layers');
   if (layers != null) document.getElementById('f-gpu-layers').value = layers;
+  const moeLayers = val('n_cpu_moe_layers');
+  const moeEl = document.getElementById('f-n-cpu-moe');
+  if (moeEl) moeEl.value = (moeLayers != null) ? moeLayers : 0;
   document.getElementById('f-threads').value = val('threads') || '';
   const tbEl = document.getElementById('f-threads-batch');
   if (tbEl) tbEl.value = val('threads_batch') || '';
