@@ -2364,11 +2364,11 @@ body.login-page {
   }
   /* Force badge + every button to the same width in this zone so the two
      sub-rows produce a clean 2-column grid: [HEALTHY][Stop] above
-     [Logs][Stats] with matched column edges. Without min-width the
-     shorter "Stop" label makes column 2 narrower than the "Stats" column
-     below it (see image #6). status-badge text-align is centered so
-     "HEALTHY" sits above "Logs" instead of hugging the badge's own
-     shrunk-to-fit width. box-sizing so padding is inside the min-width. */
+     [Logs][Stats] with matched column edges. Without this the shorter
+     "Stop" label makes column 2 narrower than the "Stats" column below
+     it (image #6). box-sizing so padding is inside the min-width;
+     text-align: center so "HEALTHY" sits above "Logs" instead of
+     hugging the badge's own shrunk-to-fit width. */
   .inst-controls .btn {
     min-width: 90px;
     box-sizing: border-box;
@@ -2378,6 +2378,15 @@ body.login-page {
     min-width: 90px;
     box-sizing: border-box;
     text-align: center;
+  }
+  /* "Restart" is a longer label than "Stop" / "Logs" / "Stats" and its
+     natural width overflowed the 90px min, so it stuck out past the
+     other buttons (image #7). Tighter horizontal padding drops the
+     natural width back inside 90px so the min-width applies and the
+     column edges line up. */
+  .inst-controls .btn-restart {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }
 
