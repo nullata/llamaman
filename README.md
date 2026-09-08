@@ -221,6 +221,12 @@ An opt-in background scan (**Settings → Download Settings**) keeps these answe
 3. Click **Launch** - llamaMan spawns a llama-server container and the instance appears with a status badge
 4. Optionally **Save Preset** to remember settings
 
+The launch form's action row also carries three tool buttons on the right:
+
+- **Export preset** - download the current form values as a JSON file (portable across nodes; does not save to storage).
+- **Import preset** - load a preset JSON into the form. Populates fields only; you still hit Save Preset to persist.
+- **Copy llama.cpp command** - copies the equivalent `llama-server ...` invocation for the current form values to your clipboard. Rendered server-side through the same flag-emission code the real launch uses, so it stays in sync as flags evolve.
+
 With settings collapsed, a **Quick Launch** button starts the selected model straight from its preset.
 
 Each instance exposes an OpenAI-compatible API on its assigned port. When a GGUF is selected, llamaMan reads its metadata to detect layer count and shows it next to **GPU Layers** (e.g. `/ 32`).
@@ -389,7 +395,7 @@ Per-GPU VRAM and utilization, queried natively - no running llama-server require
 
 | Vendor | Method | Requirement |
 |---|---|---|
-| NVIDIA | `pynvml` (NVML direct) | Uncomment `deploy.resources.reservations` in `docker-compose.yml` for NVIDIA toolkit `utility` capability |
+| NVIDIA | `nvidia-ml-py` (NVML direct) | Uncomment `deploy.resources.reservations` in `docker-compose.yml` for NVIDIA toolkit `utility` capability |
 | AMD | `/sys/class/drm` sysfs | `/sys/class/drm:ro` volume mount (included by default) |
 | Intel Arc | `/sys/class/drm` sysfs | Same mount as AMD |
 
@@ -399,7 +405,7 @@ Without native access, llamaMan falls back to exec-ing `nvidia-smi` / `rocm-smi`
 
 Under **Settings → App Settings → Request recording**: **Off** (default) / **Per request** / **Per conversation** (turns grouped by a content hash of the system prompt + first user message). Each record captures the bodies + envelope fields (model, endpoint, status, duration, token counts) plus **accurate per-turn metrics** (throughput measured over the generation window; TTFT). Records live under `RECORDINGS_DIR` (JSON) or the `request_log` table (MariaDB). **Retention (days)** prunes hourly (`0` = keep forever).
 
-Each instance card exposes a **Stats** button (request count, avg/peak throughput, avg TTFT/latency, token totals, active time span) rolled up from the request log - so it persists after the instance is stopped and shows an empty state when recording is off. The **Logging** link in the header opens a full-page dashboard (summary tiles, recent conversations, per-conversation drill-down) with a 24h / 7d / 30d / All time-window selector.
+Each instance card exposes a **Stats** button (request count, avg/peak throughput, avg TTFT/latency, token totals, active time span) rolled up from the request log - so it persists after the instance is stopped and shows an empty state when recording is off. The **Logging** link in the header opens a full-page dashboard (summary tiles, recent conversations, per-conversation drill-down) with a 24h / 7d / 30d / All time-window selector plus per-model and per-day filters over the conversation list.
 
 ## Model Eviction
 
@@ -631,6 +637,7 @@ All endpoints return / accept JSON. Management endpoints need a session cookie (
 | `DELETE` | `/api/instances/<id>/remove` | Remove a stopped-instance record |
 | `GET` | `/api/instances/<id>/logs`, `.../logs/stream` | Tail / SSE stream logs |
 | `GET` | `/api/next-port` | Get next available port from the pool |
+| `POST` | `/api/preview-command` | Render the equivalent `llama-server ...` command for a launch body (used by the UI's "Copy llama.cpp command" tool; does not launch anything) |
 
 **Launch body** (`POST /api/instances`): the launch form's fields, serialized as JSON. See the [Launch settings reference](#launch-settings-reference) above for every field and its default; enum-valued fields (`flash_attn`, `reasoning_format`, `split_mode`, `cache_type_k/v`, `spec_type`) accept only the values listed there and default to the reference's default. Numeric fields left as `null` or omitted use the reference default; unknown fields are ignored.
 

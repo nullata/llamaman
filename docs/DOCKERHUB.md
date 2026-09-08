@@ -64,7 +64,7 @@ docker run -d \
 
 `LLAMAMAN_NODE_NAME` is **required** - the container refuses to start without it. Pick it once and keep it (changing later orphans stored state). See the full env-var list below.
 
-For native NVIDIA VRAM monitoring (pynvml), also add:
+For native NVIDIA VRAM monitoring (via `nvidia-ml-py`), also add:
 ```bash
   --gpus '"driver=nvidia,capabilities=utility"' \
 ```
