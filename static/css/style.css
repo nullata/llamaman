@@ -838,6 +838,43 @@ select option {
   align-items: center;
 }
 
+/* Two-group form-actions row used at the bottom of the launch settings modal:
+   primary actions (Launch / Save Preset / status) pinned left, preset-tool
+   buttons (export / import / copy llama-server command) pinned right. Wraps
+   on narrow viewports so the tool buttons drop below the primaries rather
+   than pushing them off-screen. */
+.form-actions-split {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.form-actions-primary,
+.form-actions-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Small icon-only utility button used by the preset-tool row. Matches the
+   .btn baseline (border/radius from that class) but strips the padding + text
+   weight so a 32px square icon reads as an affordance next to the wider
+   Launch / Save Preset buttons rather than competing with them. */
+.btn.btn-tool {
+  padding: 6px 10px;
+  background: var(--surface);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1;
+}
+.btn.btn-tool:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.btn.btn-tool:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
 /* ---- Instances ---- */
 #instance-container {
   display: flex;

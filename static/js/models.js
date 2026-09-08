@@ -421,6 +421,145 @@ async function ghostDownload(m) {
   }
 }
 
+// Apply a preset dict to every field in the launch form.
+//
+// Two entry points: selectModel (when the user picks a model in the sidebar
+// and its stored preset loads) and the Import Preset button in the launch
+// modal. Extracting this out of selectModel means Import re-uses the exact
+// same field-by-field application - defaults, legacy-value coercions, and
+// dependent-state refreshes - rather than a divergent second copy that would
+// silently rot as preset fields are added.
+//
+// Every field defaults to the value llama.cpp itself uses when the flag is
+// absent, so a preset saved before a given field existed lands on the same
+// zero-value behavior after this runs. Assumes `p` is a preset-shaped dict
+// (same shape stored on disk / returned by /api/presets/<path>).
+function applyPresetToLaunchForm(p) {
+  if (!p || typeof p !== 'object') return;
+  // Shared (cluster-wide) fields
+  const ctxField = document.getElementById('f-ctx-size');
+  if (p.ctx_size != null && ctxField) ctxField.value = p.ctx_size;
+  document.getElementById('f-extra').value = p.extra_args || '';
+  document.getElementById('f-spec-enabled').checked = !!p.spec_enabled;
+  const specTypeSel = document.getElementById('f-spec-type');
+  specTypeSel.value = p.spec_type || 'draft-mtp';
+  if (!specTypeSel.value) specTypeSel.value = 'draft-mtp';  // preset names a type we don't offer
+  document.getElementById('f-spec-draft-model').value = p.spec_draft_model || '';
+  document.getElementById('f-spec-draft-n-max').value = p.spec_draft_n_max ?? '';
+  // Advanced spec-decoding fields: null / undefined -> blank input, which
+  // readLaunchForm will translate back to "don't send the key" so the
+  // server preserves llama-server's own defaults.
+  const nMinEl = document.getElementById('f-spec-draft-n-min');
+  if (nMinEl) nMinEl.value = p.spec_draft_n_min ?? '';
+  const pSplitEl = document.getElementById('f-spec-draft-p-split');
+  if (pSplitEl) pSplitEl.value = p.spec_draft_p_split ?? '';
+  const pMinEl = document.getElementById('f-spec-draft-p-min');
+  if (pMinEl) pMinEl.value = p.spec_draft_p_min ?? '';
+  document.getElementById('f-mmproj-enabled').checked = !!p.mmproj_enabled;
+  document.getElementById('f-mmproj-path').value = p.mmproj_path || '';
+  // Offload defaults TRUE (llama.cpp's default): only an explicit
+  // false unchecks it. undefined/null/missing (presets saved before
+  // this field) must land checked, or the next save would write
+  // mmproj_offload:false and silently disable GPU offload.
+  const moEl = document.getElementById('f-mmproj-offload');
+  if (moEl) moEl.checked = p.mmproj_offload !== false;
+  const pdfIn = document.getElementById('f-pdf-input-enabled');
+  if (pdfIn) pdfIn.checked = !!p.pdf_input_enabled;
+  const pdfText = document.getElementById('f-pdf-extract-text-first');
+  if (pdfText) pdfText.checked = !!p.pdf_extract_text_first;
+  const pdfDpi = document.getElementById('f-pdf-dpi');
+  if (pdfDpi) pdfDpi.value = p.pdf_dpi || 200;
+  const pdfMax = document.getElementById('f-pdf-max-pages');
+  if (pdfMax) pdfMax.value = p.pdf_max_pages || 20;
+  document.getElementById('f-idle-timeout').value = p.idle_timeout_min || 0;
+  document.getElementById('f-max-concurrent').value = p.max_concurrent || 0;
+  document.getElementById('f-max-queue-depth').value = p.max_queue_depth || 200;
+  document.getElementById('f-share-queue').checked = !!p.share_queue;
+  const _gIn = document.getElementById('f-share-queue-group');
+  if (_gIn) _gIn.value = p.share_queue_group || '';
+  const _fbIn = document.getElementById('f-share-queue-fallback');
+  if (_fbIn) _fbIn.checked = !!p.share_queue_fallback;
+  if (typeof updateShareQueueClusterRow === 'function') updateShareQueueClusterRow();
+  document.getElementById('f-auto-restart').checked = !!p.auto_restart_on_crash;
+  document.getElementById('f-embedding-model').checked = !!p.embedding_model;
+  document.getElementById('f-proxy-sampling-override-enabled').checked = !!p.proxy_sampling_override_enabled;
+  document.getElementById('f-proxy-sampling-temperature').value = p.proxy_sampling_temperature ?? 0.8;
+  document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
+  document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
+  document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
+  document.getElementById('f-proxy-sampling-repeat-penalty').value = p.proxy_sampling_repeat_penalty ?? 0.0;
+  // Flash Attention + KV cache types are shared across nodes (behavior
+  // knobs, not topology) - restore them here alongside other shared fields.
+  // flash_attn is llama.cpp's tri-state ('on'|'off'|'auto'); legacy presets
+  // stored a bool, so coerce true -> 'on' / false -> 'off' and fall back to
+  // 'auto' for anything else (missing, null, unknown string).
+  const flashAttnEl = document.getElementById('f-flash-attn');
+  if (flashAttnEl) {
+    let fa = p.flash_attn;
+    if (fa === true) fa = 'on';
+    else if (fa === false) fa = 'off';
+    else if (typeof fa === 'string') fa = fa.trim().toLowerCase();
+    if (fa !== 'on' && fa !== 'off' && fa !== 'auto') fa = 'auto';
+    flashAttnEl.value = fa;
+  }
+  const ctkEl = document.getElementById('f-cache-type-k');
+  if (ctkEl) ctkEl.value = p.cache_type_k || 'f16';
+  const ctvEl = document.getElementById('f-cache-type-v');
+  if (ctvEl) ctvEl.value = p.cache_type_v || 'f16';
+  // Reasoning format is a shared behavior knob (same tier as flash_attn /
+  // cache types). Coerce unknown / missing to 'auto' so a preset saved
+  // before this field existed lands on llama.cpp's own default.
+  const rfEl = document.getElementById('f-reasoning-format');
+  if (rfEl) {
+    let rf = (typeof p.reasoning_format === 'string') ? p.reasoning_format.trim().toLowerCase() : '';
+    if (!['auto', 'none', 'deepseek', 'deepseek-legacy'].includes(rf)) rf = 'auto';
+    rfEl.value = rf;
+  }
+  // Load mode is a shared behavior knob (same tier as flash_attn /
+  // reasoning_format). Coerce unknown / missing to 'auto' so a preset
+  // saved before this field existed lands on llama.cpp's own default.
+  const lmEl = document.getElementById('f-load-mode');
+  if (lmEl) {
+    let lm = (typeof p.load_mode === 'string') ? p.load_mode.trim().toLowerCase() : '';
+    if (!['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio'].includes(lm)) lm = 'auto';
+    lmEl.value = lm;
+  }
+  // Anti-Loop: DRY sampler + output loop detection. Both shared behavior
+  // knobs; a preset saved before this feature has no keys, so we fall
+  // back to disabled + llama.cpp/detector defaults exactly.
+  const dryEnEl = document.getElementById('f-dry-enabled');
+  if (dryEnEl) dryEnEl.checked = !!p.dry_enabled;
+  const dryMulEl = document.getElementById('f-dry-multiplier');
+  if (dryMulEl) dryMulEl.value = p.dry_multiplier ?? 0.8;
+  const dryBaseEl = document.getElementById('f-dry-base');
+  if (dryBaseEl) dryBaseEl.value = p.dry_base ?? 1.75;
+  const dryAlEl = document.getElementById('f-dry-allowed-length');
+  if (dryAlEl) dryAlEl.value = p.dry_allowed_length ?? 2;
+  const dryPnEl = document.getElementById('f-dry-penalty-last-n');
+  if (dryPnEl) dryPnEl.value = (p.dry_penalty_last_n == null) ? '' : p.dry_penalty_last_n;
+  const ldEnEl = document.getElementById('f-loop-detect-enabled');
+  if (ldEnEl) ldEnEl.checked = !!p.loop_detect_enabled;
+  const ldChunkEl = document.getElementById('f-loop-detect-min-chunk-chars');
+  if (ldChunkEl) ldChunkEl.value = p.loop_detect_min_chunk_chars ?? 200;
+  const ldRepEl = document.getElementById('f-loop-detect-min-repetitions');
+  if (ldRepEl) ldRepEl.value = p.loop_detect_min_repetitions ?? 3;
+  const ldBufEl = document.getElementById('f-loop-detect-max-buffer-chars');
+  if (ldBufEl) ldBufEl.value = p.loop_detect_max_buffer_chars ?? 8192;
+  const ldTokEl = document.getElementById('f-loop-detect-scan-every-n-tokens');
+  if (ldTokEl) ldTokEl.value = p.loop_detect_scan_every_n_tokens ?? 64;
+  const ldIntEl = document.getElementById('f-loop-detect-scan-interval-s');
+  if (ldIntEl) ldIntEl.value = p.loop_detect_scan_interval_s ?? 10;
+  if (typeof updateAntiLoopState === 'function') updateAntiLoopState();
+  document.getElementById('f-note').value = p.note || '';
+  // Per-node hardware (base, overlaid with the selected node's override)
+  applyPresetHardwareForNode(p, _launchNode());
+  if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
+  if (typeof updateSpecState === 'function') updateSpecState();
+  if (typeof updateMmprojState === 'function') updateMmprojState();
+  if (typeof updateGpuSettingsState === 'function') updateGpuSettingsState();
+  if (typeof updateModelSettingsState === 'function') updateModelSettingsState();
+}
+
 async function selectModel(model, el) {
   document.querySelectorAll('.model-item').forEach(x => x.classList.remove('selected'));
   el.classList.add('selected');
@@ -444,127 +583,7 @@ async function selectModel(model, el) {
       const p = await res.json();
       _loadedPreset = p;
       _loadedPresetPath = model.path;
-      // Shared (cluster-wide) fields
-      if (p.ctx_size != null && ctxField) ctxField.value = p.ctx_size;
-      document.getElementById('f-extra').value = p.extra_args || '';
-      document.getElementById('f-spec-enabled').checked = !!p.spec_enabled;
-      const specTypeSel = document.getElementById('f-spec-type');
-      specTypeSel.value = p.spec_type || 'draft-mtp';
-      if (!specTypeSel.value) specTypeSel.value = 'draft-mtp';  // preset names a type we don't offer
-      document.getElementById('f-spec-draft-model').value = p.spec_draft_model || '';
-      document.getElementById('f-spec-draft-n-max').value = p.spec_draft_n_max ?? '';
-      // Advanced spec-decoding fields: null / undefined -> blank input, which
-      // readLaunchForm will translate back to "don't send the key" so the
-      // server preserves llama-server's own defaults.
-      const nMinEl = document.getElementById('f-spec-draft-n-min');
-      if (nMinEl) nMinEl.value = p.spec_draft_n_min ?? '';
-      const pSplitEl = document.getElementById('f-spec-draft-p-split');
-      if (pSplitEl) pSplitEl.value = p.spec_draft_p_split ?? '';
-      const pMinEl = document.getElementById('f-spec-draft-p-min');
-      if (pMinEl) pMinEl.value = p.spec_draft_p_min ?? '';
-      document.getElementById('f-mmproj-enabled').checked = !!p.mmproj_enabled;
-      document.getElementById('f-mmproj-path').value = p.mmproj_path || '';
-      // Offload defaults TRUE (llama.cpp's default): only an explicit
-      // false unchecks it. undefined/null/missing (presets saved before
-      // this field) must land checked, or the next save would write
-      // mmproj_offload:false and silently disable GPU offload.
-      const moEl = document.getElementById('f-mmproj-offload');
-      if (moEl) moEl.checked = p.mmproj_offload !== false;
-      const pdfIn = document.getElementById('f-pdf-input-enabled');
-      if (pdfIn) pdfIn.checked = !!p.pdf_input_enabled;
-      const pdfText = document.getElementById('f-pdf-extract-text-first');
-      if (pdfText) pdfText.checked = !!p.pdf_extract_text_first;
-      const pdfDpi = document.getElementById('f-pdf-dpi');
-      if (pdfDpi) pdfDpi.value = p.pdf_dpi || 200;
-      const pdfMax = document.getElementById('f-pdf-max-pages');
-      if (pdfMax) pdfMax.value = p.pdf_max_pages || 20;
-      document.getElementById('f-idle-timeout').value = p.idle_timeout_min || 0;
-      document.getElementById('f-max-concurrent').value = p.max_concurrent || 0;
-      document.getElementById('f-max-queue-depth').value = p.max_queue_depth || 200;
-      document.getElementById('f-share-queue').checked = !!p.share_queue;
-      const _gIn = document.getElementById('f-share-queue-group');
-      if (_gIn) _gIn.value = p.share_queue_group || '';
-      const _fbIn = document.getElementById('f-share-queue-fallback');
-      if (_fbIn) _fbIn.checked = !!p.share_queue_fallback;
-      if (typeof updateShareQueueClusterRow === 'function') updateShareQueueClusterRow();
-      document.getElementById('f-auto-restart').checked = !!p.auto_restart_on_crash;
-      document.getElementById('f-embedding-model').checked = !!p.embedding_model;
-      document.getElementById('f-proxy-sampling-override-enabled').checked = !!p.proxy_sampling_override_enabled;
-      document.getElementById('f-proxy-sampling-temperature').value = p.proxy_sampling_temperature ?? 0.8;
-      document.getElementById('f-proxy-sampling-top-k').value = p.proxy_sampling_top_k ?? 40;
-      document.getElementById('f-proxy-sampling-top-p').value = p.proxy_sampling_top_p ?? 0.95;
-      document.getElementById('f-proxy-sampling-presence-penalty').value = p.proxy_sampling_presence_penalty ?? 0.0;
-      document.getElementById('f-proxy-sampling-repeat-penalty').value = p.proxy_sampling_repeat_penalty ?? 0.0;
-      // Flash Attention + KV cache types are shared across nodes (behavior
-      // knobs, not topology) - restore them here alongside other shared fields.
-      // flash_attn is llama.cpp's tri-state ('on'|'off'|'auto'); legacy presets
-      // stored a bool, so coerce true -> 'on' / false -> 'off' and fall back to
-      // 'auto' for anything else (missing, null, unknown string).
-      const flashAttnEl = document.getElementById('f-flash-attn');
-      if (flashAttnEl) {
-        let fa = p.flash_attn;
-        if (fa === true) fa = 'on';
-        else if (fa === false) fa = 'off';
-        else if (typeof fa === 'string') fa = fa.trim().toLowerCase();
-        if (fa !== 'on' && fa !== 'off' && fa !== 'auto') fa = 'auto';
-        flashAttnEl.value = fa;
-      }
-      const ctkEl = document.getElementById('f-cache-type-k');
-      if (ctkEl) ctkEl.value = p.cache_type_k || 'f16';
-      const ctvEl = document.getElementById('f-cache-type-v');
-      if (ctvEl) ctvEl.value = p.cache_type_v || 'f16';
-      // Reasoning format is a shared behavior knob (same tier as flash_attn /
-      // cache types). Coerce unknown / missing to 'auto' so a preset saved
-      // before this field existed lands on llama.cpp's own default.
-      const rfEl = document.getElementById('f-reasoning-format');
-      if (rfEl) {
-        let rf = (typeof p.reasoning_format === 'string') ? p.reasoning_format.trim().toLowerCase() : '';
-        if (!['auto', 'none', 'deepseek', 'deepseek-legacy'].includes(rf)) rf = 'auto';
-        rfEl.value = rf;
-      }
-      // Load mode is a shared behavior knob (same tier as flash_attn /
-      // reasoning_format). Coerce unknown / missing to 'auto' so a preset
-      // saved before this field existed lands on llama.cpp's own default.
-      const lmEl = document.getElementById('f-load-mode');
-      if (lmEl) {
-        let lm = (typeof p.load_mode === 'string') ? p.load_mode.trim().toLowerCase() : '';
-        if (!['auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio'].includes(lm)) lm = 'auto';
-        lmEl.value = lm;
-      }
-      // Anti-Loop: DRY sampler + output loop detection. Both shared behavior
-      // knobs; a preset saved before this feature has no keys, so we fall
-      // back to disabled + llama.cpp/detector defaults exactly.
-      const dryEnEl = document.getElementById('f-dry-enabled');
-      if (dryEnEl) dryEnEl.checked = !!p.dry_enabled;
-      const dryMulEl = document.getElementById('f-dry-multiplier');
-      if (dryMulEl) dryMulEl.value = p.dry_multiplier ?? 0.8;
-      const dryBaseEl = document.getElementById('f-dry-base');
-      if (dryBaseEl) dryBaseEl.value = p.dry_base ?? 1.75;
-      const dryAlEl = document.getElementById('f-dry-allowed-length');
-      if (dryAlEl) dryAlEl.value = p.dry_allowed_length ?? 2;
-      const dryPnEl = document.getElementById('f-dry-penalty-last-n');
-      if (dryPnEl) dryPnEl.value = (p.dry_penalty_last_n == null) ? '' : p.dry_penalty_last_n;
-      const ldEnEl = document.getElementById('f-loop-detect-enabled');
-      if (ldEnEl) ldEnEl.checked = !!p.loop_detect_enabled;
-      const ldChunkEl = document.getElementById('f-loop-detect-min-chunk-chars');
-      if (ldChunkEl) ldChunkEl.value = p.loop_detect_min_chunk_chars ?? 200;
-      const ldRepEl = document.getElementById('f-loop-detect-min-repetitions');
-      if (ldRepEl) ldRepEl.value = p.loop_detect_min_repetitions ?? 3;
-      const ldBufEl = document.getElementById('f-loop-detect-max-buffer-chars');
-      if (ldBufEl) ldBufEl.value = p.loop_detect_max_buffer_chars ?? 8192;
-      const ldTokEl = document.getElementById('f-loop-detect-scan-every-n-tokens');
-      if (ldTokEl) ldTokEl.value = p.loop_detect_scan_every_n_tokens ?? 64;
-      const ldIntEl = document.getElementById('f-loop-detect-scan-interval-s');
-      if (ldIntEl) ldIntEl.value = p.loop_detect_scan_interval_s ?? 10;
-      if (typeof updateAntiLoopState === 'function') updateAntiLoopState();
-      document.getElementById('f-note').value = p.note || '';
-      // Per-node hardware (base, overlaid with the selected node's override)
-      applyPresetHardwareForNode(p, _launchNode());
-      if (typeof updateProxySamplingOverrideState === 'function') updateProxySamplingOverrideState();
-      if (typeof updateSpecState === 'function') updateSpecState();
-      if (typeof updateMmprojState === 'function') updateMmprojState();
-      if (typeof updateGpuSettingsState === 'function') updateGpuSettingsState();
-      if (typeof updateModelSettingsState === 'function') updateModelSettingsState();
+      applyPresetToLaunchForm(p);
       toast('Preset loaded', 'info');
     }
   } catch (e) { /* no preset, use defaults */ }

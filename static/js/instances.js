@@ -1015,6 +1015,214 @@ if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
   }
 });
 
+// -------------------------------------------------------------------------
+// Preset export / import + Copy llama-server command
+//
+// Three small icon buttons pinned right in the launch-form action row (see
+// the .form-actions-secondary group in index.html). All three read from the
+// live form, so what you see is what you get - unsaved edits are exported /
+// previewed exactly as they'd launch. Import ONLY populates the form; the
+// user still hits "Save Preset" to persist to storage, so an import can be
+// tried against the current model without committing to it.
+//
+// Copy-command bounces through /api/preview-command instead of building the
+// llama-server flag list in JavaScript, because build_llama_cmd() (200 lines
+// of empty-means-auto / whitelist / tri-state rules) is the sole source of
+// truth for how a config becomes a CLI. Duplicating it here would silently
+// rot as those rules evolve.
+// -------------------------------------------------------------------------
+
+const EXPORT_ENVELOPE_KIND = 'llamaman-preset';
+const EXPORT_ENVELOPE_VERSION = 1;
+
+function _presetExportFilename(modelPath) {
+  const base = (modelPath || 'preset').split('/').pop() || 'preset';
+  // Strip .gguf so the exported file is e.g. "llama-3-8b.preset.json" instead
+  // of "llama-3-8b.gguf.preset.json" - which reads as a broken GGUF file to
+  // anyone glancing at their downloads folder.
+  const stem = base.replace(/\.gguf$/i, '');
+  return `${stem}.preset.json`;
+}
+
+function exportPreset() {
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  if (!modelPath) {
+    toast('Select a model first', 'error');
+    return;
+  }
+  let preset;
+  try {
+    preset = readLaunchForm();
+  } catch (e) {
+    toast('Cannot export: ' + e.message, 'error');
+    return;
+  }
+  preset.note = (document.getElementById('f-note').value || '').trim();
+  // Not writing override_node_id: it's per-launch runtime metadata, not a
+  // portable preset attribute, and importing on another node with a stale
+  // override_node_id would silently target the wrong node.
+  const envelope = {
+    kind: EXPORT_ENVELOPE_KIND,
+    version: EXPORT_ENVELOPE_VERSION,
+    exported_at: new Date().toISOString(),
+    model_path: modelPath,
+    preset,
+  };
+  const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = _presetExportFilename(modelPath);
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Preset exported', 'success');
+}
+
+async function handleImportPresetFile(evt) {
+  const file = evt.target.files && evt.target.files[0];
+  // Always clear the input so re-picking the same file re-fires 'change'.
+  evt.target.value = '';
+  if (!file) return;
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  if (!modelPath) {
+    toast('Select a model before importing a preset', 'error');
+    return;
+  }
+  let text;
+  try {
+    text = await file.text();
+  } catch (e) {
+    toast('Could not read the file', 'error');
+    return;
+  }
+  let env;
+  try {
+    env = JSON.parse(text);
+  } catch (e) {
+    toast('Not a valid JSON file', 'error');
+    return;
+  }
+  if (!env || typeof env !== 'object') {
+    toast('Not a preset file', 'error');
+    return;
+  }
+  // Accept EITHER the wrapped envelope (what export writes) OR a bare preset
+  // dict (what /api/presets returns), so users can import a JSON copy-pasted
+  // out of the API response or a hand-authored file, not just files this UI
+  // exported. Envelope wins when both shapes match.
+  let preset;
+  if (env.kind === EXPORT_ENVELOPE_KIND && env.preset && typeof env.preset === 'object') {
+    if (env.version && env.version > EXPORT_ENVELOPE_VERSION) {
+      toast(`Preset was exported by a newer llamaMan (v${env.version}); some fields may be ignored`, 'info');
+    }
+    preset = env.preset;
+  } else if (typeof env.ctx_size !== 'undefined' || typeof env.extra_args !== 'undefined') {
+    // Heuristic: bare preset dicts always carry at least one of these two.
+    preset = env;
+  } else {
+    toast('This does not look like a preset file', 'error');
+    return;
+  }
+  if (typeof applyPresetToLaunchForm !== 'function') {
+    toast('Import wiring missing (applyPresetToLaunchForm)', 'error');
+    return;
+  }
+  try {
+    applyPresetToLaunchForm(preset);
+  } catch (e) {
+    toast('Could not apply the preset: ' + e.message, 'error');
+    return;
+  }
+  toast('Preset loaded into form (not saved)', 'success');
+}
+
+async function copyLlamaCommand() {
+  const modelPath = document.getElementById('f-model-path').value.trim();
+  if (!modelPath) {
+    toast('Select a model first', 'error');
+    return;
+  }
+  let body;
+  try {
+    body = readLaunchForm();
+  } catch (e) {
+    toast('Cannot render command: ' + e.message, 'error');
+    return;
+  }
+  body.model_path = modelPath;
+  const port = parseInt(document.getElementById('f-port')?.value, 10);
+  if (Number.isInteger(port) && port > 0) body.port = port;
+  const btn = document.getElementById('btn-copy-llama-cmd');
+  if (btn) btn.disabled = true;
+  try {
+    const res = await apiFetch('/api/preview-command', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res) return;
+    if (!res.ok) {
+      const data = await readApiResponse(res);
+      toast(`Could not render command: ${data.error || 'unknown error'}`, 'error');
+      return;
+    }
+    const data = await res.json();
+    const cmd = (data && data.command) || '';
+    if (!cmd) {
+      toast('Server returned an empty command', 'error');
+      return;
+    }
+    // Clipboard API needs a secure context (https or localhost). Fall back
+    // to a textarea + execCommand so this still works over plain HTTP on a
+    // LAN llamaMan install - not deprecated to the point of removal in any
+    // shipping browser, and the alternative is silently failing on the
+    // exact hosts this tool most often runs on.
+    let copied = false;
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(cmd); copied = true; }
+      catch (e) { /* fall through to the textarea trick */ }
+    }
+    if (!copied) {
+      const ta = document.createElement('textarea');
+      ta.value = cmd;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
+      document.body.removeChild(ta);
+    }
+    if (copied) {
+      toast('llama-server command copied to clipboard', 'success');
+    } else {
+      // Last-ditch surface so the user still gets the command.
+      toast('Copy blocked; command logged to console', 'info');
+      // eslint-disable-next-line no-console
+      console.log(cmd);
+    }
+  } catch (e) {
+    toast('Error rendering command: ' + e.message, 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+const exportPresetBtn = document.getElementById('btn-export-preset');
+if (exportPresetBtn) exportPresetBtn.addEventListener('click', exportPreset);
+
+const importPresetBtn = document.getElementById('btn-import-preset');
+const importPresetFile = document.getElementById('import-preset-file');
+if (importPresetBtn && importPresetFile) {
+  importPresetBtn.addEventListener('click', () => importPresetFile.click());
+  importPresetFile.addEventListener('change', handleImportPresetFile);
+}
+
+const copyLlamaCmdBtn = document.getElementById('btn-copy-llama-cmd');
+if (copyLlamaCmdBtn) copyLlamaCmdBtn.addEventListener('click', copyLlamaCommand);
+
 const proxySamplingOverrideToggle = document.getElementById('f-proxy-sampling-override-enabled');
 if (proxySamplingOverrideToggle) {
   proxySamplingOverrideToggle.addEventListener('change', updateProxySamplingOverrideState);

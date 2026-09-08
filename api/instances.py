@@ -1081,6 +1081,51 @@ def api_instances_list():
     return jsonify(safe)
 
 
+@bp.route("/api/preview-command", methods=["POST"])
+def api_preview_command():
+    """Return the shell-escaped llama-server command that a Launch with this
+    body would produce - the exact same flag-emission logic as a real launch,
+    fed through build_llama_cmd, joined with shlex.
+
+    Serves the "Copy llama.cpp command" button in the launch settings modal.
+    We deliberately DO NOT re-implement the flag emission on the client:
+    build_llama_cmd is 200+ lines of empty-means-auto / whitelist / tri-state
+    rules with explicit comments warning against drift, so the browser calls
+    back here for the canonical rendering. That also guarantees the button
+    stays honest as those rules evolve - one code path, one source of truth.
+
+    body = the same JSON the /api/instances POST handler accepts (whatever
+    readLaunchForm sends). Only model_path is required; every other field
+    falls back to build_llama_cmd's own defaults, which mirror llama.cpp's.
+
+    Returns {"command": "llama-server --model ... --port 8000 ..."}.
+
+    Note: the model path is emitted verbatim - it's the CONTAINER-visible
+    path llama-server actually reads inside the sibling container, not the
+    host path. Users copying this to run llama-server directly on the host
+    will need to swap the prefix; the UI hint alongside the button says so.
+    """
+    import shlex
+    body = request.get_json(force=True) or {}
+    model_path = (body.get("model_path") or "").strip()
+    if not model_path:
+        return jsonify({"error": "model_path is required"}), 400
+    try:
+        port = int(body.get("port", 8000))
+    except (TypeError, ValueError):
+        port = 8000
+    # build_llama_cmd is defensive against un-normalized input (re-lowers
+    # cache types, folds legacy flash_attn booleans, whitelist-filters
+    # reasoning_format / load_mode), so we can hand it the raw form body
+    # instead of routing through launch_instance's kwarg surface. Any
+    # invalid combinations that would fail at launch will fail at launch;
+    # preview's job is to reflect what llamaMan would emit, not to
+    # duplicate the parse_* validators.
+    flags = build_llama_cmd(model_path, port, body)
+    command = shlex.join(["llama-server", *flags])
+    return jsonify({"command": command})
+
+
 @bp.route("/api/instances", methods=["POST"])
 def api_instances_create():
     body = request.get_json(force=True)
