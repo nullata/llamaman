@@ -4,14 +4,16 @@
 
 # <img src="static/images/logo.svg" alt="logo" width="24"> llamaMan
 
-Browser UI for launching, monitoring, and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances. llamaMan is a lightweight Python app with **no dependency on llama.cpp itself** - it spawns `ghcr.io/ggml-org/llama.cpp:server-*` containers as siblings over the Docker socket. Ships an Ollama-compatible API proxy so it drops in as an Ollama replacement for [Open WebUI](https://github.com/open-webui/open-webui).
+**What it is.** A browser UI + API front-end for running multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances, across one machine or a small cluster of them. Ships an Ollama-compatible proxy so it drops in for [Open WebUI](https://github.com/open-webui/open-webui).
+
+**What's different.** llamaMan itself has **no llama.cpp code and no GPU dependency** - it spawns `ghcr.io/ggml-org/llama.cpp:server-*` containers as siblings over the Docker socket. Nodes are heterogeneous (each has its own GPUs, presets, images), a shared queue can route the same model name to the least-loaded peer, and every launch knob (spec-decoding, MoE offload, KV quant, flash-attn, load-mode, mmproj, PDF input) is a first-class UI field. Update llama.cpp without touching llamaMan: `docker pull` a newer `server-*` image.
 
 > llama-server flag semantics are the source of truth on llama.cpp's side: **[server CLI reference](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)**.
 
 ## Contents
 
-- [Features](#features) · [How It Works](#how-it-works) · [Quick Start](#quick-start)
-- [Authentication](#authentication) · [Models](#models) · [Launching Instances](#launching-instances) · [Launch settings reference](#launch-settings-reference)
+- [Features](#features) · [Architecture](#architecture) · [Request Flow](#request-flow) · [Design Decisions](#design-decisions--trade-offs)
+- [Quick Start](#quick-start) · [Authentication](#authentication) · [Models](#models) · [Launching Instances](#launching-instances) · [Launch settings reference](#launch-settings-reference)
 - [Image & PDF Input](#image--pdf-input) · [Anti-Loop](#anti-loop) · [Per-Instance Proxy](#per-instance-proxy) · [Idle Timeout](#idle-timeout) · [GPU Stats](#gpu-stats)
 - [Request Recording & Stats](#request-recording--stats) · [Model Eviction](#model-eviction) · [OpenWebUI](#openwebui-integration)
 - [Storage & DB Outage Mirror](#storage-backends) · [Clustering](#clustering)
@@ -19,43 +21,99 @@ Browser UI for launching, monitoring, and managing multiple [llama.cpp](https://
 
 ## Features
 
-- **Universal GPU image** - one Dockerfile / image flow for NVIDIA, AMD (ROCm), Intel Arc, and CPU; GPU vendor auto-detected (`GPU_TYPE` / `LLAMA_IMAGE` override)
-- **Flexible deployment** - runs in Docker (default) or bare-metal on the host (e.g. under WSL); auto-detects which
-- **Model library + downloader** - scans for GGUF, pulls from HuggingFace with speed limits, resume, auto-retry, and republish detection with atomic re-pull
-- **One-click launch + presets** - per-model launch settings with **live updates** for fields that don't need a relaunch (idle-timeout, gates, sampling overrides)
-- **Speculative decoding** - all five draft-model families (`draft-simple/-mtp/-dflash/-dspark/-eagle3`) with advanced knobs (`n-max/n-min/p-split/p-min`)
-- **Flash Attention + KV cache quant + reasoning format + load mode** - `--flash-attn`, `--cache-type-k/v`, `--reasoning-format`, `--load-mode` (mmap/mlock/dio) all exposed; UI enforces the quantized-V-requires-FA-On constraint
-- **Anti-Loop** - two-tier defense against stuck models: DRY sampler (soft, sampling-time) plus proxy-side output loop detection that watches the streamed text and hard-kills the turn when a large chunk repeats often enough; both off by default, tuned per preset
-- **Image & PDF input** - `--mmproj` for vision models; PDFs rasterized page-by-page (or inlined as text via the born-digital shortcut); OpenAI `image_url`/`file` and Ollama `images[]` both supported
-- **Instance management + monitoring** - stop/restart/logs; per-GPU VRAM, container CPU% + RAM, and per-instance throughput / TTFT / latency rolled up from the request log
-- **Ollama + OpenAI proxy on `:42069`** - Open WebUI drops in; auto-starts models on demand; LRU-evicts once `LLAMAMAN_MAX_MODELS` is hit
-- **Auth** - user accounts, API keys (bearer tokens), toggle for whether model endpoints require auth
+- **Universal GPU image** - one flow for NVIDIA, AMD (ROCm), Intel Arc, CPU; vendor auto-detected (`GPU_TYPE` / `LLAMA_IMAGE` override)
+- **Runs in Docker or bare-metal** - auto-detected; both reach spawned containers correctly
+- **Model library + downloader** - HuggingFace pulls with speed limits, resume, auto-retry, republish detection with atomic re-pull
+- **One-click launch + presets** - per-model settings; **live updates** for fields that don't need a relaunch (idle-timeout, gates, sampling overrides)
+- **Speculative decoding** - all five draft families (`draft-simple/-mtp/-dflash/-dspark/-eagle3`) with advanced knobs (`n-max/n-min/p-split/p-min`)
+- **MoE offload** - `--cpu-moe` / `--n-cpu-moe` exposed as a sentinel int; shrinks big-MoE VRAM ~4-10x
+- **Flash Attention + KV cache quant + reasoning format + load mode** - all exposed; UI enforces the quantized-V-requires-FA-on constraint
+- **Anti-Loop** - DRY sampler *plus* proxy-side output loop detection that hard-kills the turn when a chunk repeats too often; both off by default, tuned per preset
+- **Image & PDF input** - `--mmproj` for vision models; PDFs rasterized page-by-page (or inlined as text via the born-digital shortcut); OpenAI `image_url`/`file` and Ollama `images[]` both work
+- **Instance monitoring** - per-GPU VRAM, container CPU/RAM, per-instance TTFT / throughput / latency rolled up from the request log
+- **Ollama + OpenAI proxy on `:42069`** - auto-starts models on demand; LRU-evicts once `LLAMAMAN_MAX_MODELS` is hit
+- **Auth** - user accounts, API keys (bearer tokens), per-endpoint auth toggle
 - **Persistent state** - JSON (default) or MariaDB/MySQL; MariaDB unlocks clustering + optional local DB-outage mirror
-- **Multi-node clustering** *(opt-in)* - several llamaman deployments as one logical cluster: aggregated dashboard, cross-node launches/pulls/downloads, shared-queue load balancing
-- **Request recording + logging dashboard** - opt-in per-request or per-conversation recording with retention; dedicated Logging page over the record
-- **Per-model display names** - a friendly name that API clients (OpenWebUI) see and accept instead of the raw quant filename
-- **Docker image management** - pull any llama.cpp image by name, delete old local images from the UI
+- **Multi-node clustering** *(opt-in)* - heterogeneous nodes as one logical cluster; aggregated dashboard; shared-queue load balancing
+- **Request recording + logging dashboard** - opt-in per-request or per-conversation, with retention
+- **Per-model display names** - friendly name API clients (OpenWebUI) see and accept instead of the raw quant filename
+- **Docker image management** - pull any llama.cpp image by name; delete old local images from the UI
 
-## How It Works
+## Architecture
 
-llamaMan spawns each llama-server as a **sibling container** on the host via the Docker socket. GPU passthrough, port binding, and volume mounts are configured per-container via the Docker SDK.
+llamaMan is a small Python app that never touches llama.cpp code directly. It spawns each `llama-server` as a sibling container over the Docker socket, monitors the fleet, and hands out an OpenAI/Ollama front door.
 
+```mermaid
+flowchart LR
+  client[Client<br/>Open WebUI / any OpenAI or Ollama client]
+
+  subgraph nodeA[Node A]
+    lmA[llamaman<br/>:5000 UI · :42069 compat]
+    subgraph workersA[llama-server siblings on host GPUs]
+      wA1[qwen2.5-14b]
+      wA2[gpt-oss-20b]
+    end
+  end
+
+  subgraph nodeB[Node B]
+    lmB[llamaman]
+    subgraph workersB[llama-server siblings]
+      wB1[qwen2.5-14b]
+      wB2[deepseek-v3]
+    end
+  end
+
+  db[(Shared storage<br/>presets · instance state · heartbeats)]
+
+  client -->|prompt| lmA
+  lmA -->|forward when a peer is less loaded| lmB
+  lmA --> wA1
+  lmA --> wA2
+  lmB --> wB1
+  lmB --> wB2
+  lmA <-.-> db
+  lmB <-.-> db
 ```
-Host machine
-├── Docker daemon
-│   ├── llamaman container         (Python only - no GPU usage - only monitoring, no llama.cpp)
-│   │   └── /var/run/docker.sock   (talks to Docker daemon)
-│   ├── llamaman-<id> container    (llama.cpp:server-cuda, GPU attached)
-│   └── llamaman-<id> container    (llama.cpp:server-cuda, GPU attached)
-└── GPU hardware
-```
 
-**Containerized vs bare-metal:** the diagram above is the default (llamaman as a container on `llamaman-net`, reaching siblings by container name). llamaman can also run bare-metal directly on the host - in that case it reaches spawned containers via `localhost` on their published ports. Mode is auto-detected; force it with `LLAMAMAN_IN_DOCKER`.
+The single-node picture (default) is just the top half - one llamaman container, N `llama-server` siblings on the local Docker daemon, no cluster peers, JSON files instead of the shared DB. Clustering is opt-in and additive.
 
-**Update llama.cpp without rebuilding llamaman:**
-```bash
-docker pull ghcr.io/ggml-org/llama.cpp:server-cuda
-```
+**Containerized vs bare-metal.** llamaMan runs in Docker by default (`llamaman-net`, reaching siblings by container name) or bare-metal on the host (reaches spawned containers via `localhost` on their published ports). Mode is auto-detected; force with `LLAMAMAN_IN_DOCKER`.
+
+**Heterogeneous clusters.** Every node has its own hardware (GPU count/vendor/VRAM), its own model files on disk, its own llama.cpp image, and its own hardware-scoped preset overrides. The shared DB carries presets, users, API keys, per-node instance state, and cluster heartbeats - not the model files.
+
+**Queue-aware dispatch + cross-node work stealing.** When two nodes serve the same model (or the same `share_queue_group` alias), an inbound request for that name gets routed to whichever peer has the fewest in-flight requests. If the picked node is saturated its `RequestGate` still tries to hand the request off to a peer with free capacity instead of queueing.
+
+**Model loading + LRU eviction.** The `:42069` compat proxy auto-launches models on demand. Once `LLAMAMAN_MAX_MODELS` is hit, the least-recently-used non-admin instance is stopped to make room. Sleeping instances still count against the slot; idle timeout is a separate axis.
+
+**Resilient storage.** MariaDB is on the critical path of every request (auth reads settings and keys per call). A local JSON mirror in `DATA_DIR/db_mirror/` write-throughs each node-scoped update; when the breaker opens, reads fall back to the mirror and writes are journalled + replayed on reconnect. Off by default, one setting to turn on.
+
+**Multimodal.** Vision models load their `--mmproj` projector alongside the main GGUF. OpenAI `image_url` / `file` and Ollama `images[]` both work. PDFs are rasterized page-by-page, or fast-pathed as extracted text when the PDF is born-digital.
+
+**Failure behavior.** A dead container is detected by the poller and marked, and the instance's slot is freed on the next tick. A killed llamaman process, on restart, re-adopts labelled containers that are still up (their gate, sidecar proxy, and log-tail relay are all rebuilt), so no `--restart=always` gymnastics needed. A peer node that misses its heartbeat window drops out of dispatch until it comes back.
+
+**Update llama.cpp without rebuilding llamaman:** pull a newer `server-*` image from the UI (Settings → Docker Images), or hit the pull endpoint. New instances launch on the new image; existing ones keep running until you restart them.
+
+## Request Flow
+
+A concrete OpenAI-compatible chat request against a two-node cluster:
+
+1. Client `POST /v1/chat/completions` to `nodeA:42069` with model `qwen2.5-14b`.
+2. `nodeA` looks up the target: it's a live model on this node **and** on `nodeB`. Both belong to the same effective queue group.
+3. Dispatcher polls each candidate's live load (from the heartbeat cache + short-window inflight counter). `nodeB` is less loaded → the request is forwarded to `nodeB:42069`.
+4. `nodeB` claims a gate slot (429 if the queue is full and no peer has room). If sampling overrides are on, they're injected. If a per-instance sidecar exists (idle / max-concurrent / proxy-sampling), the request lands on the sidecar first, which wakes the container if it's sleeping.
+5. Sidecar forwards to `llama-server` on its internal port. Stream flows back through the sidecar → `nodeB`'s proxy → `nodeA` → client.
+6. On stream end: the request-log worker records TTFT / throughput / final token count; the gate slot is released; the LRU timestamp is bumped so this instance won't get evicted next.
+
+If `nodeB` had gone offline between the heartbeat and this call, the dispatcher would have detected the connection error and re-picked the next candidate (locally in this case).
+
+## Design Decisions & Trade-offs
+
+- **One gunicorn worker, `gthread`, `preload_app=False`.** Live state (instances, gates, downloads, idle proxies) is in-memory Python dicts; multi-worker would fragment it. Concurrency comes from threads (`threads=32` - sized for cluster-forwarded generations holding a thread for their whole duration). Trade-off: no horizontal scale within one host; scale by adding cluster nodes instead.
+- **`LLAMAMAN_NODE_NAME` is mandatory.** It's the storage partition key. Changing it after first boot orphans that node's rows. Trade-off: one extra env var required for even single-node installs, but a shared DB stays sane across a cluster and legacy rows are auto-adopted on first boot.
+- **Entry node holds the connection.** A forwarded request keeps a thread on both the entry node and the target for the whole generation - no client-side dispatch, so any OpenAI/Ollama client works unchanged. Trade-off: the entry node's thread pool caps concurrent cross-node inference.
+- **Sentinel forwarding.** llama.cpp values like `-2 = all` for `--n-gpu-layers` or `-1 = --cpu-moe` are passed through verbatim rather than being translated on our side. Trade-off: fragile against upstream changing what those sentinels mean, but zero translation drift and every llama-server release lands the same day.
+- **In-memory state, DB is the mirror.** Runtime truth is the module-level dicts under a lock; the DB is a durable mirror. Trade-off: a crash between save points loses seconds, not requests - every state-changing call snapshots to the backend before returning.
+- **`ResilientBackend` is off by default.** With a shared MariaDB, one setting turns on a local JSON mirror + write journal so a DB outage doesn't 500 every request or fail startup. Off by default so single-DB deployments keep the simpler code path. Trade-off: mirror mode reconciles wholesale for node-scoped rows on reconnect, so it doesn't fit a cluster where two nodes concurrently mutate the same partitioned data (they don't, by design).
 
 ## Requirements
 
