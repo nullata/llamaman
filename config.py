@@ -125,8 +125,12 @@ def _detect_in_docker() -> bool:
 IN_DOCKER = _detect_in_docker()
 # Host llamaman uses to reach bare-metal-published llama-server ports.
 LLAMA_HOST_ADDR = os.environ.get("LLAMA_HOST_ADDR", "localhost").strip() or "localhost"
-# GPU_TYPE: set to override auto-detection ("cuda", "rocm", "intel").
-# Leave unset to let llamaman probe the host automatically.
+# GPU_TYPE: set to override auto-detection ("cuda", "rocm", "intel", "vulkan").
+# Leave unset to let llamaman probe the host automatically. "vulkan" is
+# opt-in only (never auto-detected) - it selects the Vulkan device path
+# (/dev/dri + host render/video GIDs, no /dev/kfd) and the server-vulkan
+# image default, letting AMD hosts fall back off ROCm without hijacking the
+# Intel Arc code path.
 GPU_TYPE = os.environ.get("GPU_TYPE", "").strip().lower()
 # Comma-separated GPU indices visible to all llama-server containers, e.g. "0,1,3".
 # Empty (default) means all GPUs. Per-instance gpu_devices overrides this when set.
@@ -139,6 +143,7 @@ _VENDOR_IMAGE_DEFAULTS = {
     "cuda": "ghcr.io/ggml-org/llama.cpp:server-cuda",
     "rocm": "ghcr.io/ggml-org/llama.cpp:server-rocm",
     "intel": "ghcr.io/ggml-org/llama.cpp:server-sycl",
+    "vulkan": "ghcr.io/ggml-org/llama.cpp:server-vulkan",
 }
 
 

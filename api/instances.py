@@ -328,6 +328,28 @@ def _make_rocm_devices() -> list[str]:
     return ["/dev/kfd:/dev/kfd", "/dev/dri:/dev/dri"]
 
 
+def _resolve_group_add() -> list:
+    """group_add list for containers that need /dev/dri access.
+
+    Prefer numeric host GIDs (stat'd from the render/card device nodes) over
+    the name-based ["video", "render"] default because Docker resolves group
+    names against the CONTAINER's /etc/group, and some upstream llama.cpp
+    images (notably server-vulkan) don't ship a `render` group entry - the
+    launch then fails with `Unable to find group render: no matching entries
+    in group file` (issue #85). Numeric GIDs bypass that name lookup and
+    match the kernel's device-node permission check directly.
+
+    Falls back to names when /dev/dri isn't visible from where llamaman runs
+    (e.g. containerized llamaman without /dev/dri mounted), which preserves
+    the historical behaviour for image/host combinations where names work.
+    """
+    from core.gpu import resolve_render_gids
+    gids = resolve_render_gids()
+    if gids:
+        return [str(gid) for gid in gids]
+    return ["video", "render"]
+
+
 def _run_container(
     inst_id: str,
     container_name: str,
@@ -396,7 +418,7 @@ def _run_container(
         pass
     elif vendor == "rocm":
         kwargs["devices"] = _make_rocm_devices()
-        kwargs["group_add"] = ["video", "render"]
+        kwargs["group_add"] = _resolve_group_add()
         effective_gpus = _resolve_gpu_devices(gpu_devices)
         if effective_gpus:
             kwargs.setdefault("environment", {})["ROCR_VISIBLE_DEVICES"] = effective_gpus
@@ -404,7 +426,14 @@ def _run_container(
         # Intel Arc: /dev/dri access only (no /dev/kfd). Per-instance GPU
         # selection is not supported for Intel (no SYCL_VISIBLE_DEVICES equivalent).
         kwargs["devices"] = ["/dev/dri:/dev/dri"]
-        kwargs["group_add"] = ["video", "render"]
+        kwargs["group_add"] = _resolve_group_add()
+    elif vendor == "vulkan":
+        # Generic Vulkan (typically AMD without ROCm, or Intel via ANV). Only
+        # /dev/dri is needed - no /dev/kfd (that's ROCm's compute node) - and
+        # the container process needs supplementary group membership at the
+        # host render/video GIDs to actually open the render node.
+        kwargs["devices"] = ["/dev/dri:/dev/dri"]
+        kwargs["group_add"] = _resolve_group_add()
     else:
         # NVIDIA (cuda) or unknown/CPU - use Docker device_requests
         kwargs["device_requests"] = _make_device_requests(gpu_devices)

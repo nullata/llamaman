@@ -138,6 +138,7 @@ Pull the llama.cpp image for your GPU and start:
 | NVIDIA | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
 | AMD (ROCm) | `ghcr.io/ggml-org/llama.cpp:server-rocm` |
 | Intel Arc | `ghcr.io/ggml-org/llama.cpp:server-sycl` |
+| Vulkan (AMD/Intel fallback) | `ghcr.io/ggml-org/llama.cpp:server-vulkan` (set `GPU_TYPE=vulkan`) |
 | CPU only | `ghcr.io/ggml-org/llama.cpp:server` |
 
 ```bash
@@ -591,7 +592,7 @@ A few settings are scoped per node because they're host-specific: tracked **Dock
 | `LLAMA_CONTAINER_PREFIX` | `llamaman-` | Name prefix for spawned llama-server containers |
 | `LLAMAMAN_IN_DOCKER` | *(auto)* | Whether llamaman itself runs in a container. Auto-detected from marker files + cgroups. Set `true`/`false` to override |
 | `LLAMA_HOST_ADDR` | `localhost` | Host address used to reach spawned containers' published ports when running bare-metal |
-| `GPU_TYPE` | *(auto)* | Override GPU vendor detection: `cuda`, `rocm`, or `intel` |
+| `GPU_TYPE` | *(auto)* | Override GPU vendor detection: `cuda`, `rocm`, `intel`, or `vulkan` (`vulkan` is opt-in only; picks `/dev/dri` + host render/video GIDs and the `server-vulkan` image) |
 | `LLAMA_GPU_DEVICES` | *(all)* | Comma-separated GPU indices visible to all spawned containers (e.g. `0,1,3`). Per-instance **GPU Devices** overrides. Not supported on Intel Arc |
 
 ### Clustering
@@ -687,6 +688,7 @@ OpenAI: `/v1/models`, `/v1/chat/completions` (chat auto-starts).
 | No GPU / CUDA error | Ensure NVIDIA Container Toolkit is installed and `docker run --gpus all` works on the host |
 | No GPU / ROCm error | Ensure `/dev/kfd` and `/dev/dri` exist and your user is in `video`/`render` |
 | No GPU / Intel Arc error | Ensure `/dev/dri` is accessible and your user is in `video`/`render` |
+| Vulkan image fails with _"Unable to find group render"_ | Set `GPU_TYPE=vulkan` so llamaMan attaches the host render/video GIDs numerically (name-based group_add fails on images whose /etc/group doesn't ship a `render` entry) |
 | GPU stats unavailable | NVIDIA: uncomment the `deploy.resources.reservations` block. AMD/Intel: ensure `/sys/class/drm:ro` is mounted |
 | Wrong GPU vendor detected | Set `GPU_TYPE=cuda`/`rocm`/`intel` to override |
 | Instance stuck on **starting** running bare-metal | The container is healthy but llamaman can't reach it. Set `LLAMAMAN_IN_DOCKER=false`/`true` explicitly if auto-detection is wrong for your runtime |

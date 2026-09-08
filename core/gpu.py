@@ -8,7 +8,14 @@ Detection order (when GPU_TYPE env var is not set):
   3. Intel   - same sysfs path, vendor ID 0x8086
   4. None    - no GPU detected / no monitoring access
 
-GPU_TYPE env var always overrides auto-detection when set.
+GPU_TYPE env var always overrides auto-detection when set. Recognized values:
+  - "cuda"    NVIDIA / CUDA runtime (device_requests via NVIDIA Container Toolkit)
+  - "rocm"    AMD / ROCm runtime (mounts /dev/kfd + /dev/dri, host render/video GIDs)
+  - "intel"   Intel Arc / SYCL (mounts /dev/dri, host render/video GIDs)
+  - "vulkan"  Generic Vulkan (mounts /dev/dri, host render/video GIDs) - use with
+              a Vulkan-enabled llama.cpp image (default: server-vulkan). Never
+              auto-detected; opt-in only, because from a PCI vendor ID alone we
+              can't tell whether the operator wants Vulkan over ROCm/SYCL.
 """
 
 import glob
@@ -215,4 +222,44 @@ def query_gpus() -> list[dict] | None:
         return query_amd_sysfs()
     if vendor == "intel":
         return query_intel_sysfs()
+    if vendor == "vulkan":
+        # Vulkan is a runtime, not a hardware vendor - the physical device is
+        # still AMD or Intel (or NVIDIA, though there NVML gives us more). We
+        # try AMD sysfs first because that's the primary use case (RDNA users
+        # falling back off ROCm), then Intel; a Vulkan-on-NVIDIA host will
+        # simply report no GPU stats here, which is honest.
+        return query_amd_sysfs() or query_intel_sysfs() or query_nvidia_pynvml()
     return None
+
+
+# ---------------------------------------------------------------------------
+# Host GID resolution for /dev/dri passthrough
+# ---------------------------------------------------------------------------
+
+def resolve_render_gids(dri_dir: str = "/dev/dri") -> list[int]:
+    """Return numeric host GIDs owning the DRM render/card device nodes.
+
+    Docker's group_add accepts either group names or numeric GIDs. Names are
+    resolved against the *container's* /etc/group at start, so passing
+    "render" fails on any image whose /etc/group happens not to define that
+    entry (which is exactly what happens with some Vulkan builds of the
+    upstream llama.cpp image, and is what issue #85 hit). Numeric GIDs skip
+    the name lookup entirely: the container process is given supplementary
+    membership at those IDs and the kernel's /dev/dri permission check
+    matches directly against the host device-node ownership.
+
+    We read both renderD* (typically the `render` group) and card* (typically
+    `video`) so both classes of node are usable inside the container.
+
+    Returns [] when /dev/dri is not visible from where llamaman runs - e.g.
+    llamaman itself in a container that didn't get /dev/dri mounted - and
+    callers then fall back to the name-based ["video", "render"] default.
+    """
+    gids: set[int] = set()
+    for pattern in ("renderD*", "card*"):
+        for path in glob.glob(os.path.join(dri_dir, pattern)):
+            try:
+                gids.add(os.stat(path).st_gid)
+            except OSError:
+                continue
+    return sorted(gids)
