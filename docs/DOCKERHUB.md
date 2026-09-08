@@ -12,7 +12,7 @@ Full docs and source: **[github.com/nullata/llamaman](https://github.com/nullata
 
 ## Features
 
-- **Universal GPU image** - one image, auto-detects NVIDIA / AMD (ROCm) / Intel Arc / CPU
+- **Universal GPU image** - one image, auto-detects NVIDIA / AMD (ROCm) / Intel Arc / CPU. Vulkan is opt-in via `GPU_TYPE=vulkan` for AMD/Intel hosts falling back off ROCm/SYCL.
 - **Model library + downloader** - scans `/models` for GGUF, pulls from HuggingFace with speed limits, resume, auto-retry, and republish detection with atomic re-pull
 - **One-click launch + presets** - per-model launch settings with live updates for the fields that don't need a relaunch (idle-timeout, gates, sampling overrides)
 - **Instance management** - stop / restart / logs / stats; per-GPU VRAM, container CPU% + RAM, and per-instance throughput / TTFT / latency rolled up from the request log
@@ -39,6 +39,7 @@ Pull the llama.cpp server image for your GPU, then run llamaMan. `HOST_MODELS_DI
 | NVIDIA | `ghcr.io/ggml-org/llama.cpp:server-cuda` |
 | AMD (ROCm) | `ghcr.io/ggml-org/llama.cpp:server-rocm` |
 | Intel Arc | `ghcr.io/ggml-org/llama.cpp:server-sycl` |
+| Vulkan (AMD/Intel fallback) | `ghcr.io/ggml-org/llama.cpp:server-vulkan` — set `GPU_TYPE=vulkan` |
 | CPU only | `ghcr.io/ggml-org/llama.cpp:server` |
 
 ```bash
@@ -136,7 +137,7 @@ Only the ones you'll typically touch. See the [full reference on GitHub](https:/
 | `LLAMA_IMAGE` | *(auto)* | llama.cpp server image for spawned containers. Auto-picked from detected GPU vendor; set to pin a version / backend. |
 | `HOST_MODELS_DIR` | *(same as `MODELS_DIR`)* | **Host-side** absolute path of the models volume. Must match the left side of `-v /host/path:/models`. |
 | `HOST_LOGS_DIR` | *(same as `LOGS_DIR`)* | Same requirement as `HOST_MODELS_DIR`. |
-| `GPU_TYPE` | *(auto)* | Override GPU vendor detection: `cuda` / `rocm` / `intel`. |
+| `GPU_TYPE` | *(auto)* | Override GPU vendor detection: `cuda` / `rocm` / `intel` / `vulkan`. `vulkan` is opt-in only (never auto-detected); picks `/dev/dri` + host render/video GIDs and the `server-vulkan` image, so AMD/Intel hosts can fall back off ROCm/SYCL. |
 | `LLAMA_GPU_DEVICES` | *(all)* | Comma-separated GPU indices visible to spawned containers (e.g. `0,1`). Not supported on Intel Arc. |
 | `LLAMAMAN_MAX_MODELS` | `0` | Max concurrent chat models via the proxy (LRU eviction). `0` = unlimited. |
 | `LLAMAMAN_IDLE_TIMEOUT` | `0` | Idle-timeout minutes for proxy-managed instances (auto-restarts on next request). `0` = disabled. |
@@ -199,7 +200,7 @@ Three toggles under **Settings → App Settings** relax these defaults ("Enforce
 ## Requirements
 
 - Docker with access to `/var/run/docker.sock`
-- One of: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), a [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/), Intel Arc with `/dev/dri` access, or CPU-only
+- One of: [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), a [ROCm-compatible setup](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/), Intel Arc with `/dev/dri` access, a Vulkan-capable GPU with `/dev/dri` access (opt-in via `GPU_TYPE=vulkan`), or CPU-only
 
 ## Links
 
