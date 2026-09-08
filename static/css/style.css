@@ -2247,6 +2247,39 @@ body.login-page {
 .lw-btn:hover { color: var(--text); }
 .lw-btn.active { background: var(--green); color: #fff; }
 
+/* Recent-Conversations filters (model + date). Sits between the title and
+   the "Clear all" button in the card header. The model dropdown is
+   populated from the fetched list on every load; the date is a native
+   picker matched against last_seen_at on the same local calendar day. Both
+   compose with the page-level time window (AND). All filtering is
+   client-side, over the same /api/request-log/conversations?limit=200
+   response the list already renders from - no backend changes. Filters
+   only tighten the recent-200 window, so a date earlier than that window
+   reaches will legitimately show nothing. */
+.logging-filters {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.logging-filters select,
+.logging-filters input[type="date"] {
+  width: auto;
+  padding: 5px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.logging-filters select { max-width: 200px; }
+.lf-clear {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 12px;
+}
+.lf-clear:hover { color: var(--text); border-color: var(--border); }
+
 .logging-banner {
   background: var(--surface);
   border: 1px solid var(--border);

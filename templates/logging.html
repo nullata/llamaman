@@ -43,6 +43,15 @@
     <div class="card">
       <div class="logging-header">
         <h2 class="logging-title">Recent Conversations</h2>
+        <div class="logging-filters" role="group" aria-label="Conversation filters">
+          <select id="logging-model-filter" aria-label="Filter by model">
+            <option value="">All models</option>
+          </select>
+          <input type="date" id="logging-date-filter" aria-label="Filter by date" />
+          <button type="button" class="lf-clear" id="lf-clear" title="Clear filters" hidden>
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
         <button type="button" class="btn btn-danger" id="btn-clear-logs">
           <i class="fa-solid fa-trash"></i> Clear all
         </button>

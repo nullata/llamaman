@@ -9,6 +9,16 @@
 let _windowHours = 0;   // 0 = all time
 let _refreshTimer = null;
 
+// Cache of the most recent /api/request-log/conversations?limit=200 response
+// so that flipping the client-side model/date filters re-renders instantly
+// without a network round trip. Refreshed on every actual load. Filters only
+// ever narrow this recent-200 window; a date earlier than the window reaches
+// will legitimately match nothing, which is honest given the shape of the
+// endpoint (no `since=`/`model=` on the backend today).
+let _lastConversations = [];
+let _modelFilter = '';  // exact match against c.model; '' = all
+let _dateFilter = '';   // 'YYYY-MM-DD' local calendar day; '' = any
+
 // ---- formatting ----
 function fmtInt(n) { return (n == null) ? '–' : Number(n).toLocaleString(); }
 
@@ -96,36 +106,107 @@ function withinWindow(iso) {
   return (Date.now() - t) <= _windowHours * 3600 * 1000;
 }
 
-async function loadConversations() {
+// Matches when the conversation's last activity falls on the same LOCAL
+// calendar day as the picker's value. Native <input type="date"> gives us
+// 'YYYY-MM-DD' in the browser's locale, and we compare against
+// `last_seen_at` re-projected into that locale - not UTC - so a user
+// picking "yesterday" sees what they'd call yesterday, not what the server
+// stored as UTC-yesterday.
+function matchesDate(iso, dateStr) {
+  if (!dateStr) return true;
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return false;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}` === dateStr;
+}
+
+function matchesModel(model, filter) {
+  if (!filter) return true;
+  return (model || '') === filter;
+}
+
+// Populates the model dropdown from the unique models in the fetched list,
+// preserving the currently selected value if it's still present. Called on
+// every load so a newly-seen model surfaces on the next refresh without a
+// full page reload. The "All models" default option stays pinned first.
+function populateModelFilter(list) {
+  const sel = document.getElementById('logging-model-filter');
+  if (!sel) return;
+  const models = Array.from(new Set(list.map(c => c.model || '').filter(Boolean))).sort();
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All models</option>' +
+    models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
+  // Restore selection if the model is still in the list; otherwise clear the
+  // filter so the user isn't left staring at zero rows because the model
+  // they picked rotated out of the recent-200 window.
+  if (current && models.includes(current)) {
+    sel.value = current;
+  } else if (current) {
+    sel.value = '';
+    _modelFilter = '';
+  }
+}
+
+function updateFilterClearVisibility() {
+  const btn = document.getElementById('lf-clear');
+  if (!btn) return;
+  btn.hidden = !(_modelFilter || _dateFilter);
+}
+
+function renderConversations() {
   const box = document.getElementById('logging-conversations');
+  if (!box) return;
+  const list = _lastConversations;
+  const filtered = list.filter(c =>
+    withinWindow(c.last_seen_at)
+    && matchesModel(c.model, _modelFilter)
+    && matchesDate(c.last_seen_at, _dateFilter),
+  );
+
+  if (filtered.length === 0) {
+    // Distinguish "nothing recorded" from "your filters hid it all" so a
+    // user who narrowed too far knows the fix is to loosen a filter rather
+    // than to go enable recording.
+    const filtersActive = _modelFilter || _dateFilter;
+    const windowSuffix = _windowHours > 0 ? ' in this window' : '';
+    const msg = filtersActive
+      ? `No conversations match the current filters${windowSuffix}.`
+      : `No recorded conversations${windowSuffix} yet.`;
+    box.innerHTML = `<div class="logging-empty">${msg}</div>`;
+    return;
+  }
+
+  box.innerHTML = filtered.map(c => {
+    const tokens = (c.prompt_tokens || 0) + (c.completion_tokens || 0);
+    const title = c.title ? esc(c.title) : '<span class="logging-untitled">(no prompt text)</span>';
+    const turns = Number(c.turn_count) || 0;
+    return `<button type="button" class="logging-conv-row" data-id="${esc(c.conversation_id)}">
+      <span class="lc-title">${title}</span>
+      <span class="lc-model">${esc(c.model || '')}</span>
+      <span class="lc-meta">${fmtInt(turns)} turn${turns === 1 ? '' : 's'}</span>
+      <span class="lc-meta">${fmtTokens(tokens)} tok</span>
+      <span class="lc-when">${esc(fmtWhen(c.last_seen_at))}</span>
+    </button>`;
+  }).join('');
+
+  box.querySelectorAll('.logging-conv-row').forEach(row => {
+    row.addEventListener('click', () => openConversation(row.dataset.id));
+  });
+}
+
+async function loadConversations() {
   try {
     const res = await apiFetch('/api/request-log/conversations?limit=200');
     if (!res) return;
     let list = await res.json();
     if (!Array.isArray(list)) list = [];
-    const filtered = list.filter(c => withinWindow(c.last_seen_at));
-
-    if (filtered.length === 0) {
-      box.innerHTML = `<div class="logging-empty">No recorded conversations${_windowHours > 0 ? ' in this window' : ''} yet.</div>`;
-      return;
-    }
-
-    box.innerHTML = filtered.map(c => {
-      const tokens = (c.prompt_tokens || 0) + (c.completion_tokens || 0);
-      const title = c.title ? esc(c.title) : '<span class="logging-untitled">(no prompt text)</span>';
-      const turns = Number(c.turn_count) || 0;
-      return `<button type="button" class="logging-conv-row" data-id="${esc(c.conversation_id)}">
-        <span class="lc-title">${title}</span>
-        <span class="lc-model">${esc(c.model || '')}</span>
-        <span class="lc-meta">${fmtInt(turns)} turn${turns === 1 ? '' : 's'}</span>
-        <span class="lc-meta">${fmtTokens(tokens)} tok</span>
-        <span class="lc-when">${esc(fmtWhen(c.last_seen_at))}</span>
-      </button>`;
-    }).join('');
-
-    box.querySelectorAll('.logging-conv-row').forEach(row => {
-      row.addEventListener('click', () => openConversation(row.dataset.id));
-    });
+    _lastConversations = list;
+    populateModelFilter(list);
+    updateFilterClearVisibility();
+    renderConversations();
   } catch (e) { /* ignore */ }
 }
 
@@ -204,6 +285,29 @@ document.getElementById('logging-window').addEventListener('click', (e) => {
     .forEach(b => b.classList.toggle('active', b === btn));
   loadStats();
   loadConversations();
+});
+
+// Model + date filters. They filter the CACHED list, not the server, so
+// changing either is instant - no round trip, no spinner. The page-level
+// time-window buttons above still trigger a real reload because they also
+// affect the stats API request.
+document.getElementById('logging-model-filter').addEventListener('change', (e) => {
+  _modelFilter = e.target.value || '';
+  updateFilterClearVisibility();
+  renderConversations();
+});
+document.getElementById('logging-date-filter').addEventListener('change', (e) => {
+  _dateFilter = e.target.value || '';
+  updateFilterClearVisibility();
+  renderConversations();
+});
+document.getElementById('lf-clear').addEventListener('click', () => {
+  _modelFilter = '';
+  _dateFilter = '';
+  document.getElementById('logging-model-filter').value = '';
+  document.getElementById('logging-date-filter').value = '';
+  updateFilterClearVisibility();
+  renderConversations();
 });
 
 async function clearAllLogs() {
