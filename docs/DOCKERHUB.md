@@ -4,7 +4,9 @@
 
 # <img src="https://raw.githubusercontent.com/nullata/llamaMan/4d17202d108547537c0dbc13083794274b491fd3/static/images/logo.svg" alt="logo" width="24"> llamaMan
 
-Browser UI for launching and managing multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances from a single Docker container. Ships an Ollama-compatible API proxy so it drops in as an Ollama replacement for [Open WebUI](https://github.com/open-webui/open-webui).
+**What it is.** A browser UI + API front-end for running multiple [llama.cpp](https://github.com/ggerganov/llama.cpp) server instances from one Docker container. Ollama-compatible proxy so it drops in for [Open WebUI](https://github.com/open-webui/open-webui).
+
+**What's different.** llamaMan has **no llama.cpp code and no GPU dependency** - it spawns `ghcr.io/ggml-org/llama.cpp:server-*` containers as siblings over the Docker socket. Every launch knob (spec-decoding, MoE offload, KV quant, flash-attn, load-mode, mmproj, PDF input) is a first-class UI field, and multi-node deployments can share a queue across heterogeneous hardware. Update llama.cpp without touching llamaMan: pull a newer `server-*` image from Settings → Docker Images.
 
 Full docs and source: **[github.com/nullata/llamaman](https://github.com/nullata/llamaman)**
 
@@ -18,6 +20,7 @@ Full docs and source: **[github.com/nullata/llamaman](https://github.com/nullata
 - **Flash Attention + KV cache quant + reasoning format + load mode** - `--flash-attn`, `--cache-type-k/v`, `--reasoning-format`, `--load-mode` (mmap/mlock/dio) all exposed; UI enforces the quantized-V-requires-FA-On constraint
 - **Anti-Loop** - DRY sampler (soft, sampling-time) + proxy-side output loop detection that watches the streamed text and hard-kills the turn when a large chunk repeats often enough. Both off by default, tuned per preset
 - **Speculative decoding** - all five draft-model families (`draft-simple/-mtp/-dflash/-dspark/-eagle3`) with advanced knobs (`n-min`, `p-split`, `p-min`)
+- **MoE offload** - `--cpu-moe` / `--n-cpu-moe` exposed as a sentinel int; shrinks big-MoE VRAM ~4-10x by pinning routed experts to CPU while attention / embeddings stay on GPU
 - **Image & PDF input** - `--mmproj` for vision models, PDFs rasterized page-by-page (or inlined as text via the born-digital shortcut). Works on OpenAI `image_url`/`file` and Ollama `images[]`
 - **Auth** - user accounts, API keys (bearer tokens), toggle for whether model endpoints require auth
 - **Persistent state, JSON or MariaDB** - MariaDB unlocks multi-node clustering (shared dashboard, cross-node launch/download, shared-queue load balancing) and an optional local write-through mirror that keeps the node serving through a DB outage
@@ -158,7 +161,7 @@ open-webui:
     - OPENAI_API_KEYS=llm-your-api-key-here
 ```
 
-Models are listed by GGUF filename stem; set a per-model **Display Name** to have OpenWebUI show/accept a friendly name instead. In a cluster, live shared-queue group aliases are advertised as selectable models too, so a client can send the alias and have it routed to the least-loaded node.
+Models are listed by GGUF filename stem; set a per-model **Display Name** to have OpenWebUI show/accept a friendly name instead. In a cluster, live shared-queue group aliases are advertised as selectable models too, so a client can send the alias and have it routed to the least-loaded node. Group context length is reported as the **min across live members cluster-wide**, and any node answers `/api/show` / `/v1/models` for a group even when it has no local member of it - so OpenWebUI sees the truthful runtime ctx instead of falling back to its built-in default.
 
 ## Persistent State
 
