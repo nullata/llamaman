@@ -5,7 +5,12 @@ gunicorn
 sqlalchemy
 pymysql
 docker
-pynvml
+# NVIDIA NVML bindings for the "cuda" GPU path (vendor auto-detect + VRAM /
+# util / temperature readouts). NVIDIA's official package is `nvidia-ml-py`;
+# the older `pynvml` PyPI project is a thin re-export that self-deprecates
+# at import time (issue #57). Both still expose `import pynvml`, so no code
+# change was needed on the swap - only the dependency name.
+nvidia-ml-py
 pdf2image
 pypdf
 Pillow

@@ -2734,3 +2734,18 @@ body.login-page {
   opacity: 1;
   color: var(--text);
 }
+
+/* The footer's repo link doubles as a subtle "please star this" affordance:
+   one anchor, one URL, with a star icon in front of the repo path. Muted at
+   rest so it reads as ordinary attribution; the star warms to amber on
+   hover to nod at what a click can do (both browse the repo and star it).
+   Kept quiet on purpose - a page about launching models is not the place
+   for a real CTA, this is just a low-key invitation for users who care to
+   find it. */
+.app-footer-star {
+  margin-right: 3px;
+  transition: color .15s;
+}
+.app-footer-repo:hover .app-footer-star {
+  color: var(--yellow);
+}
